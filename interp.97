@@ -1,0 +1,431 @@
+; -*- Mode: Scheme; Syntax: Scheme; Package: vm; -*-
+
+; This is file interp.scm.
+
+;;;; The interpreter
+
+; Machine state
+
+(define (initialize-machine k)		;Used only for bootstrap
+  ;; Pre-allocate the root so we don't have to cons it at GC time.
+  (let ((exc (make-vector (%vector-length exception)))
+	(int (make-vector (%vector-length interrupt)))
+	(sym (make-symbol-table))
+	(env (make-global-environment)))
+    (set! *root* (vector false exc int env sym))
+    (k exc int env sym)))
+
+; slot 0 is reserved for stack pointer
+(define (get-exception-handlers) (vector-ref *root* 1))
+(define (get-interrupt-handlers) (vector-ref *root* 2))
+(define (get-symbol-table)       (vector-ref *root* 3))  ;Boot only
+(define (get-system-environment) (vector-ref *root* 4))  ;Boot only
+
+; Contintuations
+
+(define *pc*       0)
+(define *template* (unassigned))
+(define *env*      (unassigned))
+(define *cont*	   (unassigned))
+
+(define (push-continuation pc)
+  (set! *cont* (push-vector (enter-fixnum pc)
+			    *template*
+			    *env*
+			    *cont*)))
+
+(define (pop-continuation)
+  (set-stack! *cont*)
+  (let ((cont (pop-vector 4)))
+    (set! *pc*     (extract-fixnum (continuation-pc cont)))
+    (set-template! (continuation-template cont))
+    (set! *env*    (continuation-env cont))
+    (set! *cont*   (continuation-cont cont))))
+
+(define continuation-size (stack-vector-size 5))
+
+(define *code* (unassigned))  ;Caches (template-code *template*)
+
+(define (set-template! tem)
+  (set! *template* tem)
+  (set! *code* (template-code tem)))
+
+; Interpreter state
+
+(define *nargs* (unassigned))
+(define *val*  (unassigned)) ; = arg1
+(define *arg2* (unassigned))
+(define *arg3* (unassigned))
+(define *enabled-interrupts* (unassigned))
+
+(define (push-istate)
+  (push-continuation *pc*)
+  ;; Push interrupt state.
+  (push-vector *cont*
+	       (enter-fixnum *nargs*)
+	       *val*
+	       *arg2*
+	       *arg3*
+	       (enter-fixnum *enabled-interrupts*)))
+
+(define (pop-istate)
+  (let ((istate (pop-vector 6)))
+    (set! *cont*  (istate-cont istate))
+    (set! *nargs* (istate-nargs istate))
+    (set! *enabled-interrupts* (istate-ei istate))
+    (set! *val*   (istate-val istate))
+    (pop-continuation)))
+
+(define istate-size
+  (+& (+& push-size continuation-size)
+      (stack-vector-size 5)))
+
+; Miscellaneous registers
+
+(define *exception* (unassigned))
+(define *pending-interrupt* (unassigned))
+(define *retrying-after-gc?* (unassigned))
+
+(define (clear-registers)
+  (set! *pc* -1)			;istate regs
+  (set! *cont* unspecified)
+  (set! *nargs* unspecified)
+  (set! *val* unspecified)
+  (set! *enabled-interrupts* 0)
+  (set! *retrying-after-gc?* #f)	;other regs
+  (set! *pending-interrupt* interrupt/none)
+  unspecified)
+
+; Instruction stream access
+
+(define (this-byte)
+  (code-vector-ref (template-code *template*) *pc*))
+
+(define (next-byte)
+  (let ((b (this-byte)))
+    (set! *pc* (+& *pc* 1))
+    b))
+
+(define (previous-byte)  probably not necessary
+  (set! *pc* (-& *pc* 1)))
+
+(define next-offset next-byte)
+
+(define (next-literal)
+  (vector-ref *template* (next-byte)))
+
+; Environment access
+
+(define make-rib make-vector)
+(define rib-ref  vector-ref)
+(define rib-set! vector-set!)
+(define (rib-parent rib) (rib-ref rib 0))
+
+(define (env-back env back)  ;Resembles NTHCDR
+  (do ((env env (rib-parent env))
+       (i back (-& i 1)))
+      ((=& i 0) env)))
+
+; Auxiliary
+
+(define (raise exc)
+  (set! *exception* exc)
+  (goto handle-exception))
+
+; GC invocation
+; Every instruction that conses must first check to see if it has
+; enough space to do so.
+; MARGIN is the amount of space required to get into an exception
+; handler (?).  This isn't very well thought out.
+
+(define margin istate-size)
+
+(define (ensure-space space thunk)
+  (lambda ()
+    (cond ((available? space)
+	   (set! *retrying-after-gc?* #f)
+	   (thunk))
+	  (else
+	   (goto collect-and-retry)))))
+
+(define (ensure-stack-space space thunk) ;???
+  (lambda ()
+    (cond ((available-on-stack? (+& space margin))
+	   (set! *retrying-after-gc?* #f)
+	   (thunk))
+	  (else
+	   (goto collect-and-retry)))))
+
+(define (collect-and-retry)
+  (previous-byte)
+  (cond (*retrying-after-gc?*
+	 (set! *retrying-after-gc?* #f)
+	 (raise exception/heap-overflow))
+	(else
+	 (set! *retrying-after-gc?* #t)
+	 (set! *finished* (label interpret))
+	 ;; Theorem: ...
+	 (push-istate)
+	 (goto collect))))
+
+(define (return-to-interpreter-after-gc)
+  (pop-istate)
+  (if (not (available-on-stack? margin))
+      (error "out of memory"))
+  (goto interpret))
+
+; INTERPRET is the main instruction dispatch for the interpreter.
+
+(define (interpret)
+  (dispatch opcode-dispatch (next-byte)))
+
+;;;; Opcodes
+
+(define (uuo)
+  (raise exception/uuo))
+
+(define opcode-dispatch
+  (make-dispatch-table (%vector-length op) (label uuo)))
+
+(define (define-opcode opcode tag)
+  (define-dispatch! opcode-dispatch opcode tag))
+
+; Check number of arguments
+
+(define-opcode op/check-nargs= (lambda ()
+  (cond ((=& *nargs* (next-byte))
+	 (goto interpret))
+	(else
+	 (raise exception/wrong-number-of-arguments)))))
+
+(define-opcode op/check-nargs>= (lambda ()
+  (cond ((>=& *nargs* (next-byte))
+	 (goto interpret))
+	(else
+	 (raise exception/wrong-number-of-arguments)))))
+
+; Environment creation
+;  The MAKE-ENV instruction adds a rib to the local environment.
+;  It pops values off the stack and stores them into the new
+;  rib.
+
+(define-opcode op/make-env (lambda ()
+  (set! *nargs* (this-byte))
+  (ensure-space (vector-size (+& *nargs* 1))
+    (lambda ()
+      (next-byte)
+      (let ((rib (make-rib (+& *nargs* 1))))
+	(rib-set! rib 0 *env*)
+	(set! *env* rib)
+	(do ((i *nargs* (-& i 1)))
+	    ((<=& i 0)
+	     (goto interpret))
+	  (rib-set! rib i (pop))))))))
+
+; MAKE-REST-LIST
+;  Create a list to hold the rest of the arguments, and push it
+;  onto the stack.
+
+(define-opcode op/make-rest-list (lambda ()
+  (let ((min-nargs (this-byte)))
+    (ensure-space (*& pair-size (-& *nargs* min-nargs))
+      (lambda ()
+	(next-byte)
+	(do ((i *nargs* (-& i 1))
+	     (l null (cons (pop) l)))
+	    ((=& i min-nargs)
+	     (push l)			;kludge
+	     (set! *nargs* (+& min-nargs 1))
+	     (goto interpret))))))))
+
+; Literals
+
+(define-opcode op/literal (lambda ()	;Load a literal into *val*.
+  (set! *val* (next-literal))
+  (goto interpret)))
+
+; Local variable access and assignment
+
+(define-opcode op/local (lambda ()      ;Load value of a local.
+  (let ((back (next-byte)))
+    (set! *val* (rib-ref (env-back *env* back)
+			 (next-byte)))
+    (cond ((undefined? *val*)
+	   (raise exception/unassigned-local))
+	  (else
+	   (goto interpret))))))
+
+(define-opcode op/set-local! (lambda ()
+  (let ((back (next-byte)))
+    (rib-set! (env-back *env* back)
+	      (next-byte)
+	      *val*)
+    (set! *val* unspecified)
+    (goto interpret))))
+
+; Global variable access
+
+(define-opcode op/global (lambda ()        ;Load a global variable.
+  (let ((cell (next-literal)))
+    (set! *val* (contents cell))
+    (cond ((undefined? *val*)
+	   (set! *val* cell)
+	   (raise exception/undefined-global))
+	  (else
+	   (goto interpret))))))
+
+(define-opcode op/set-global! (lambda ()
+  (let ((cell (next-literal)))
+    (cond ((eq? (contents cell) unbound-marker)
+	   (raise exception/unbound-global))
+	  (else
+	   (set-contents! cell *val*)
+	   (set! *val* unspecified)
+	   (goto interpret))))))
+
+; Stack operations
+
+(define-opcode op/push (lambda ()	;Push *val* onto the stack.
+  (ensure-stack-space push-size
+    (lambda ()
+      (push *val*)
+      (goto interpret)))))
+
+(define-opcode op/pop (lambda ()	;Pop a value off the stack into *val*.
+  (pop *val*)
+  (goto interpret)))
+
+; LAMBDA
+
+(define-opcode op/make-closure (lambda ()
+  (ensure-space closure-size
+    (lambda ()
+      (set! *val* (make-closure (next-literal) *env*))
+      (goto interpret)))))
+
+; Procedure call
+
+(define-opcode op/call (lambda ()
+  (set! *nargs* (this-byte))
+  (goto perform-application)))
+
+; Continuation creation & invocation
+
+(define-opcode op/make-cont (lambda ()   ;Start a non-tail call.
+  (ensure-stack-space continuation-size
+    (lambda ()
+      (let ((offset (next-offset)))
+	(push-continuation (+& *pc* offset))
+	(goto interpret))))))
+
+(define-opcode op/return (lambda ()      ;Invoke the continuation.
+  (pop-continuation)
+  (goto interpret)))
+
+; IF
+
+(define-opcode op/jump-if-false (lambda ()
+  (let ((offset (next-offset)))
+    (cond ((false? *val*)
+	   (set! *pc* (+& *pc* offset))
+	   (goto interpret))
+	  (else
+	   (goto interpret))))))
+
+(define-opcode op/jump (lambda ()         ;Unconditional jump
+  (let ((offset (next-offset)))
+    (set! *pc* (+& *pc* offset))
+    (goto interpret))))
+
+; Push *cont* onto stack (used by primitive-catch)
+
+(define-opcode op/push-cont (lambda ()
+  (ensure-stack-space push-size
+    (lambda ()
+      (push *cont*)
+      (goto interpret)))))
+
+(define-opcode op/pop-cont (lambda ()
+  (set! *cont* (pop))
+  (goto interpret)))
+
+; First part of APPLY: spread an argument list onto the stack.
+;  This is going to be really gross because the list has to be reversed...
+;  At the end, be sure to push length of list + (next-byte) onto stack.
+;  In an implementation in which the stack can be randomly accessed, this
+;  would be much easier!
+;  Gotta make sure also that length does circularity checking.
+
+;(define-opcode op/spread-call (lambda ()
+;  (set! *nargs* (next-byte))
+;  (if (available? (*& 3 (length *val*)))
+;      (do (...) ((not (pair? val)) ...))
+;      ...)))
+
+; Second part of APPLY: perform a procedure call, where the number of arguments
+;  is popped off the stack.
+
+(define-opcode op/n-call (lambda ()
+  (set! *nargs* (extract-fixnum (pop)))
+  (goto perform-application)))
+
+; Miscellaneous primitive procedures
+
+(define-opcode op/halt
+  (lambda ()
+    (halt-machine)))
+
+(define-opcode op/unassigned
+  (lambda ()
+    (set! *val* unassigned-marker)
+    (goto interpret)))
+
+(define-opcode op/set-enabled-interrupts!
+  ;; New interrupt mask as fixnum in *val*
+  (lambda ()
+    (let ((temp *enabled-interrupts*))
+      (set! *enabled-interrupts* (extract-fixnum *val*))
+      (set! *val* (enter-fixnum temp))
+      (goto interpret))))
+
+;;;; Procedure call
+
+(define (perform-application)
+  (cond ((closure? *val*)
+	 (set! *env* (closure-env *val*))
+	 (set! *template* (closure-template *val*))
+	 (set! *code* (template-code *template*))
+	 (set! *pc* 0)
+	 (if (>& *pending-interrupt* 0)
+	     (goto handle-interrupt)
+	     (goto interpret)))
+	(else
+	 (raise exception/bad-procedure))))
+
+; Exceptions
+
+(define (handle-exception)
+  (error "Exception:" *exception*)  ; Flush when exceptions work again
+  (cond ((available-on-stack? margin)
+	 (push (push-istate))
+	 (set! *nargs* 1)
+	 (set! *val* (vector-ref (get-exception-handlers) *exception*))
+	 (goto perform-application))
+	(else
+	 (error "out of memory"))))
+
+(define (handle-interrupt)
+  (cond ((available-on-stack? margin)
+	 (push (push-istate))
+	 (set! *nargs* 1)
+	 (set! *val* (vector-ref (get-interrupt-handlers) *pending-interrupt*))
+	 (set! *pending-interrupt*  0)
+	 (set! *enabled-interrupts* 0)	;Disable all interrupts
+	 (goto perform-application))
+	(else
+	 (error "out of memory"))))
+
+(define-opcode op/return-from-interrupt (lambda ()
+  (set-stack! *val*)
+  (pop-istate)
+  (goto interpret)))

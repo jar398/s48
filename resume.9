@@ -1,0 +1,22 @@
+; -*- Mode: Scheme; Syntax: Scheme; Package: vm; -*-
+
+; This is file resume.scm.
+
+;;;; Top level entry into Scheme-48 system
+
+; RESUME is the main entry point to the entire system, and the only
+; routine that calls RUN-MACHINE other than for bootstrapping and
+; debugging.
+
+(define (resume filename)
+  (set! *filename* filename)
+  (set! *finished* (label return-to-interpreter-after-gc))
+  (run-machine read-image))
+
+; Used by RUN (bootstrap only)
+
+(define (start-vm thunk)
+  (set! *val* thunk)
+  (set! *nargs* 0)
+  (run-machine perform-application)
+  *val*)

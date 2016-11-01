@@ -1,0 +1,183 @@
+;;; -*- Mode: Scheme; Syntax: Scheme; Package: SCHEME  -*-
+
+;;; This is file features.scm.
+
+;;;; Features
+
+;;; The FEATURES module should be tuned to the particular Scheme
+;;; implementation in which Pseudoscheme is to be bootstrapped.  This
+;;; file contains versions of these routines written in vanilla
+;;; Scheme; there are also files features.lisp, features.t, etc.
+
+;;; Miscellaneous
+
+(define t (= 1 1))
+(define nil (not t))
+(define (undefined) '<undefined>)
+(define unspecified '<unspecified>)
+
+(define (assert test)
+  (if (not test) (error "assertion failed")))
+
+(define (enforce pred val)
+  (if (pred val)
+      val
+      (error "enforce failed" pred val)))
+
+;;; 28-bits integer operations
+
+(define +&  +)
+(define -&  -)
+(define *&  *)
+(define =&  =)
+(define <&  <)
+(define <=& <=)
+(define >&  >)
+(define >=& >=)
+(define quotient&  quotient)
+(define remainder& remainder)
+
+(define (adjoin-bits high low k)
+  (+ (* high (expt 2 k)) low))
+
+(define (low-bits n k)
+  (modulo n (expt 2 k)))
+
+(define (high-bits n k)
+  (let ((two^k (expt 2 k)))
+    (if (>= n 0)
+	(quotient n two^k)
+	(quotient (- n (- two^k 1)) two^k))))
+
+;;; String operations
+
+(define (string-posq thing v)
+  (let loop ((i 0))
+    (cond ((>= i (string-length v)) nil)
+	  ((eq? thing (string-ref v i)) i)
+	  (else (loop (+ i 1))))))
+
+(define (reverse-list->string l len)
+  (let ((str (make-string len)))
+    (do ((i (- len 1) (- i 1))
+         (l l (cdr l)))
+        ((< i 0) str)
+      (string-set! str i (car l)))))
+
+(define (concatenate-symbol . things)
+  (string->symbol
+    (apply string-append
+	   (map (lambda (thing)
+		  (cond ((string? thing) thing)
+			((symbol? thing) (symbol->string thing))
+			((number? thing) (number->string thing '(heur)))
+			(else (error "bogus argument to CONCATENATE-SYMBOL"
+				     thing))))
+		things))))
+
+;;; Opaque types (not really opaque in Scheme, though)
+
+(define (inject rep type)
+  (vector type rep))
+
+(define (in? obj type)
+  (and (vector? obj) (eq? (vector-ref obj 0) type)))
+
+(define (project obj type)
+  (if (in? obj type)
+      (vector-ref obj 1)
+      (error "invalid PROJECT" obj type)))
+
+;;; Tables
+
+(define (make-table)
+  (list 'table))
+
+(define (table-ref table key)
+  (let ((probe (assq key (cdr table))))
+    (if probe (cdr probe) nil)))
+
+(define (table-set! table key val)
+  (let ((probe (assq key (cdr table))))
+    (if probe
+	(set-cdr! probe val)
+	(set-cdr! table (cons (cons key val) (cdr table))))))
+
+;;; Byte vectors
+
+(define (byte-vector? obj)
+  (in? obj 'byte-vector))
+
+(define (reverse-list->byte-vector l len)
+  (let ((vec (make-vector len)))
+    (do ((i (- len 1) (- i 1))
+         (l l (cdr l)))
+        ((< i 0) (inject vec 'byte-vector))
+      (vector-set! vec i (car l)))))
+
+(define (byte-vector-ref bv k)
+  (vector-ref (project bv 'byte-vector) k))
+
+(define (byte-vector-length bv)
+  (vector-length (project bv 'byte-vector)))
+
+;;; Templates
+
+(define (template? obj)
+  (in? obj 'template))
+
+(define (make-template code literals name)
+  (inject (list code literals name) 'template))
+
+(define (template-code tem)
+  (car (project tem 'template)))
+
+(define (template-literals tem)
+  (cadr (project tem 'template)))
+
+(define (template-name tem)
+  (caddr (project tem 'template)))
+
+;;; ASCII character conversion
+
+(define ascii-chars
+  (string-append "........."
+		 (list->string '(#\tab #\newline #\. #\page))
+		 "..................."
+		 " !\"#$%&'()*+,-./0123456789:;<=>?"
+		 "@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_"
+		 "`abcdefghijklmnopqrstuvwxyz{|}~"))
+
+(define native-chars
+  (let ((t (make-table)))
+    (let loop ((a (string->list ascii-chars))
+	       (i 0)
+	       (least    nil)
+	       (greatest nil))
+      (cond ((null? a)
+	     (let ((v (make-vector (+ (- greatest least) 1))))
+	       (do ((i least (+ i 1)))
+		   ((> i greatest) (cons least v))
+		 (vector-set! v (- i least) (table-ref t i)))))
+	    (else
+	     (let ((n (char->integer (car a))))
+	       (table-set! t n i)
+	       (loop (cdr a)
+		     (+ i 1)
+		     (if least    (min least    n) n)
+		     (if greatest (max greatest n) n))))))))
+
+(define (char->ascii char)
+  (vector-ref (cdr native-chars)
+	      (- (char->integer char) (car native-chars))))
+
+(define (ascii->char n)
+  (string-ref ascii-chars n))
+
+;;; I/O
+
+;(define peek-char --undefinable--)
+
+(define write-string display)
+
+;(define-macro (define-macro ...) --undefinable--)

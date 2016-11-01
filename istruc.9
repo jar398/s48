@@ -1,0 +1,72 @@
+; -*- Mode: Scheme; Syntax: Scheme; -*-
+
+; This is file istruct.scm.
+
+;;;; Interpreter data structures
+
+; BITS-PER-BYTE
+;  The compiler needs to know how many bits there are in a byte,
+;  since it constructs code vectors (which are vectors of bytes).
+
+(define bits-used-per-byte 7)  ;must be <= bits-per-byte
+
+(define byte-limit (expt 2 bits-used-per-byte))
+
+; Templates
+;  Templates are made only by the compiler.
+
+(define (template? obj)    ;Heuristic only, for error checking
+  (and (vector? obj)
+       (>=& (vector-length obj) 2)
+       (code-vector? (template-code obj))))
+
+(define (template-code tem) (vector-ref tem 0))
+(define (template-name tem) (vector-ref tem 1))
+
+
+; Continuations
+;  Continuations are made only by the interpreter.
+
+(define (continuation-pc c)       (vector-ref c 0))
+(define (continuation-template c) (vector-ref c 1))
+(define (continuation-env c)	  (vector-ref c 2))
+(define (continuation-cont c)	  (vector-ref c 3))
+
+
+; Interpreter state
+;  Interpreter states are made only by the interpreter.
+
+(define (istate-cont i)  (vector-ref i 0))
+(define (istate-nargs i) (vector-ref i 1))
+(define (istate-val i)	 (vector-ref i 2))
+(define (istate-arg2 i)	 (vector-ref i 3))
+(define (istate-arg3 i)	 (vector-ref i 4))
+(define (istate-ei i)	 (vector-ref i 5))
+
+
+; Cf. struct.scm:
+;
+; The hash function was tested on 607 symbols from the
+; scheme-48 sources.  Whether or not the symbol table size (modulus)
+; was prime or not was found not to make much difference; in fact,
+; moduli of 256 and 512 worked out pretty well.  The standard
+; deviation for the length of the buckets was as follows:
+;      199           1.744
+;      256           1.695
+;      509           1.175
+;      512           1.202
+;      1021          0.828
+; Since taking a remainder mod 512 is much faster than taking one mod
+; 509, 512 is the choice here for the table size.
+
+(define log-table-size 9)
+(define table-size (expt 2 log-table-size))
+
+(define (make-hash-table)
+  (let ((table (make-vector table-size)))
+    (vector-fill! table null)
+    table))
+
+(define make-global-environment make-hash-table)
+
+(define make-symbol-table make-hash-table)

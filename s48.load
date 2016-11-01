@@ -1,0 +1,35 @@
+;-*-Mode:Scheme;Package:Scheme;Syntax:Scheme;-*-
+
+;VM load order
+
+(define *unloaded-files*
+	'(
+	  ;; General
+	  FEATURES
+	  ENUM
+	  ARCH
+	  ;; Virtual machine
+	  DATA					;contains no calls to GOTO
+	  REGS
+	  RUN 
+	  GC
+	  INTERP
+	  VMIO
+	  PRIM
+	  ;; Bootstrapping
+	  BOOT
+	  COMP
+	  ;; Debugging
+	  DEBUG
+	  ))
+
+(define (load-s48)
+  (let loop ()
+       (if (null? *unloaded-files*)
+	   'done
+	   (begin (load ;(compile-file
+			  (lisp:merge-pathnames (car *unloaded-files*)
+						"ai:s48;* bin"))
+			;)
+		  (set! *unloaded-files* (cdr *unloaded-files*))
+		  (loop)))))

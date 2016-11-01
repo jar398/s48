@@ -1,0 +1,114 @@
+; -*- Mode: Scheme; Syntax: Scheme; Package: data; -*-
+
+; This is file vmio.scm.
+
+;;;; I/O primitives
+
+; Port fields:
+;  port-mode         1 = input
+;		     2 = output
+;		     (this field doesn't ever change)
+;  port-index        index into open-ports vector
+;		     0 = initial input port
+;		     1 = initial output port
+;		     -1 = not open
+;  peeked-char       char or #f
+;  port-id           for debugging
+;
+; Questions:
+;  What to do if an error occurs?
+;  How to deal with transcript-on and transcript-off ?
+;  How to deal with uninterrubtibly opening a port and pushing it onto
+;    an outstanding-ports list?
+
+; *open-ports* is a vector of descriptors for open ports.
+; *open-%ports is a vector of open "%ports".  A "%port" corresponds to
+; a non-simulated Scheme port, or to a C FILE * object.
+
+(define number-of-ports 100)
+
+(define *open-%ports* (unassigned))
+(define *open-ports*  (unassigned))
+
+(define for-input 1)
+(define for-output 2)
+
+(define iip-index 0)  ;index of initial input port
+(define iop-index 1)  ;[out/in]ditto
+
+(define (initialize-i/o-system)
+  (set! *open-%ports* (%make-vector number-of-ports #f))
+  (set! *open-ports*  (%make-vector number-of-ports false))
+  (%vector-set! *open-%ports* iip-index (current-input-port))
+  (%vector-set! *open-%ports* iop-index (current-output-port))
+  unspecified)
+
+; The continuation K gets passed the initial input and output ports.
+
+(define (create-initial-ports k)
+  (let ((iip (make-port (enter-fixnum for-input)
+			(enter-fixnum iip-index)
+			false
+			(enter-char #\i)))
+	(iop (make-port (enter-fixnum for-output)
+			(enter-fixnum iop-index)
+			false
+			(enter-char #\o))))
+    (%vector-set! *open-ports* iip-index iip)
+    (%vector-set! *open-ports* iop-index iop)
+    (k iip iop)))
+
+; Auxiliaries for I/O primitives
+
+(define (extract-port port)
+  (let ((index (extract-fixnum (port-index port))))
+    (if (>=& index 0)
+	(%vector-ref *open-%ports* index)
+	#f)))
+
+(define (find-port-index)
+  (%vector-posq #f *open-%ports*))
+
+(define (use-port-index! index port %port)
+  (%vector-set! *open-%ports* index %port)
+  (%vector-set! *open-ports*  index port))
+
+; [An open can fail for several reasons:
+;    - No space to cons new port,
+;    - No more slots in *open-ports* vector,
+;    - File not found, directory not found, bad filespec, protection, etc.
+; ]
+
+(define (open? port)
+  (>=& (extract-fixnum (port-index port)) 0))
+
+(define (close-port port)
+  (if (open? port)
+      (let ((%port (extract-port port))
+	    (index (port-index port)))
+	(cond ((=& (port-mode port) for-input)
+	       (close-input-port %port))
+	      ((=& (port-mode port) for-input)
+	       (close-output-port %port))
+	      (else
+	       (error "this shouldn't happen")))
+	(set-port-mode! port 0)
+	(set-port-index! port -1)
+	(%vector-set! *open-%ports* index #f)
+	(%vector-set! *open-ports*  index false))))
+
+; The following are auxiliaries for GC and SUSPEND.
+
+(define (close-port-noisily port)
+  (close-port port)
+  (write-string "Port closed: ")
+  (write-string (extract-string (port-id port)))
+  (newline))
+
+(define (map-over-open-ports! proc)  ;For suspend and GC
+  (do ((i 0 (+& i 1)))
+      ((=& i number-of-ports) #f)
+    (let ((port (%vector-ref *open-ports* i)))
+      (if (not (false? port))
+	  ;; Update pointer after GC
+	  (%vector-set! *open-ports* i (proc port))))))

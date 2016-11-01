@@ -1,0 +1,140 @@
+; -*- Mode: Scheme; Syntax: Scheme; Package: Scheme; -*-
+
+; This is file vm.scm.
+
+;;;; Interface definitions for virtual machine
+
+;(define-signature ascii-sig
+;  (values ascii->char char->ascii))
+
+; Bare-machine signature
+;  Things defined externally to the VM proper (by Scheme or
+;  features.scm or ascii.scm).
+
+(define-signature bare-machine-sig
+  (values
+    not
+    unassigned
+    error
+    assert
+    +& -& *& <& <=& =& >=& >& quotient& remainder&
+    adjoin-bits low-bits high-bits
+    logand			;2nd arg is always 2^k-1
+    expt			;1st arg is always 2
+    ascii->char char->ascii
+    char=? char<?
+
+    define-enumeration
+    goto computed-goto label run-machine halt-machine
+    make-dispatch-table define-dispatch! dispatch
+
+    ;; The following are only used for checking for overflow!
+    + - * < <= = >= > quotient remainder
+
+    %make-vector %vector-ref %vector-set! %vector-length
+    %vector-posq
+    %make-string %string-set!		;for extract-string
+
+    ;; I/O
+    ;; These names should have %'s in front, shouldn't they?
+    read-char write-char write-string
+    newline
+    eof-object?
+    open-input-file open-output-file
+    close-input-port close-output-port
+    current-input-port current-output-port
+
+    ;; Used only by READ-IMAGE and WRITE-IMAGE
+    write read
+    call-with-output-file call-with-input-file ;ditto
+    ))
+
+; Data-manipulation subsystem
+
+(define-signature data-sig
+  (values
+    ;; Scalar stuff
+    eq?
+    fixnum? enter-fixnum extract-fixnum
+    false? false true null enter-boolean
+    unspecified eof-object
+    undefined? unbound-marker unassigned-marker quiescent
+    char? enter-char extract-char
+
+    ;; Allocated things
+    create-memory initialize-heap *root*
+    collect write-image read-image *finished* *filename*
+    available?
+    pair? cons car cdr set-car! set-cdr! pair-size
+      length
+    symbol? intern symbol->string symbol-size
+    cell? lookup cell-name contents set-contents! cell-size
+    closure? make-closure closure-env closure-template closure-size
+    code-vector? make-code-vector code-vector-length
+      code-vector-ref code-vector-set! code-vector-size
+    string? make-string string-length string-ref string-set!
+      extract-string string-size
+    vector? make-vector vector-length vector-ref vector-set!
+      vector vector-fill! vector-size
+
+    ;; Stack allocated things
+    push pop push-size
+    push-vector pop-vector stack-vector-size
+    set-stack! available-on-stack?
+
+    ;; An unprincipled assortment of I/O routines
+    initialize-i/o-system
+    create-initial-ports
+    port? make-port port-size
+    port-mode for-input for-output open?
+    port-index find-port-index use-port-index!
+    extract-port
+    peeked-char set-peeked-char!
+    close-port
+    ))
+
+; VM-SIG
+;  The interpreter
+
+(define-signature vm-sig
+  (values
+    start-vm   ;from boot
+    resume
+    get-symbol-table
+    get-system-environment
+    clear-registers
+    initialize-machine
+    ))
+
+; Features
+
+(define-signature features-sig
+  (values
+    vector-posq string-posq
+    make-fluid fluid set-fluid! let-fluid
+    make-table table-ref table-set!
+    make-code-vector code-vector? code-vector-ref
+    code-vector-set! code-vector-length
+    make-cell cell? contents set-contents! cell-name
+    make-empty-environment
+    system-environment
+    lookup
+    concatenate-symbol
+    eval user-initial-environment   ;from pseudoscheme
+    ))
+
+; Compiler
+
+(define-signature comp-sig
+  (values
+    parse-top-level-form
+    compile-top
+    ;; Stuff for block compiler?  define-rewriter, etc.?
+    ))
+
+(define-signature boot-sig
+  (values
+    init
+    cold-load
+    run
+    initialize-memory))

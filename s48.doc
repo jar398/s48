@@ -1,0 +1,93 @@
+Scheme-48 (a two-day hack)
+
+Documentation updated 25 February 1987.
+
+System overview:
+  0. General stuff
+      FEATURES - definitions that everyone needs
+      ENUM     - macro for defining enumerated types
+      ARCH     - architecture description
+  1. Virtual machine
+      DATA     - data representations
+      RUN      - state machine driver
+      REGS     - interpreter registers
+      INTERP   - main interpreter dispatch
+      VMIO     - I/O primitives
+      PRIM     - definitions of primitives
+      GC       - garbage collector, suspend, and resume
+  2. Runtime system
+      COMP     - compiler
+      IO       - I/O system (including READ and WRITE)
+      SYS      - REPL, error system, initialization, etc.
+      BASIC    - basic definitions for runtime system
+  3. Bootstrapping mechanism
+      BOOT
+  4. Debugging tools
+      DEBUG
+
+The virtual machine takes a suspended image as input, and runs it.  The
+process of running an image causes side effects like input and output.
+
+The standard suspended image contains a body of Scheme code which has
+been compiled into byte codes by a compiler.  This body of code includes
+the reader, byte code compiler, and a number of non-primitive procedures
+such as LENGTH and APPEND.
+
+To get a suspended image the first time around, you have to use some
+utilities defined by BOOT.
+
+1. To generate a virtual machine:
+
+1a. If you want to run Scheme-48 inside of a Scheme system, load
+the following files:
+   FEATURES   [only parts of this are needed by the VM]
+   The VM (ARCH, ..., INTERP, PRIM)
+   RUN      [only the driver loop is needed]
+
+Then say ($RESUME "<suspended-image>") [see below for how to generate
+suspended images].  This should put you into the read-eval-print loop.
+
+You will want to tune the FEATURES file, which defines things like bit
+field operations, to your particular Scheme system.
+
+1b. If you want to write your own VM, you just need to translate the
+four VM files.  Do this either mechanically or by hand.  The advantage
+of doing it mechanically is that if I rewrite the VM at all, you'll be
+able to retranslate easily.  The advantage of translating by hand is
+that mechanical translators are a little tricky to write, and you'll
+probably get a more efficient VM that way.  However note that the VM
+code is all structly first-order; the only data types used are 32-bits
+integers, some contiguous segment of a single large vector (i.e.
+memory), and an occasional boolean or string.
+
+2. To run the interpreter inside of Scheme, without using the storage
+manager:
+
+   FEATURES, ARCH, RUN, STUB, INTERP, and COMP
+
+STUB replaces DATA, GC, and PRIM.  You'll want to load COMP in order to
+generate code to run.  Do (RUN '<expression>) to evaluate expressions.
+
+3. To run the storage manager without the interpreter, load the
+following into Scheme: 
+  
+   FEATURES, ARCH, RUN, ...
+
+It will be pretty painful to examine and create objects in the simulated
+heap.  The file BOOT has numerous utilities for doing things like this,
+including routines to transport Scheme objects between the native (real)
+Scheme heap and the simulated Scheme-48 heap.
+
+4. To build a suspended image from scratch:
+
+   a. Get the simulator going (as per 1a, above - you'll definitely need
+      the BOOT module)
+   b. Initialize the storage manager and evaluator with (BOOT)
+   c. Compile and load the runtime system: evaluate
+      (FOR-EACH $LOAD '("basic" "arch" "rts" "comp"))
+        appending the correct file extension, ".lisp" or ".scm"
+   d. (RUN! '(DUMP "<filename>"))  to suspend
+
+If you don't care about suspending a clean system, and want to do some
+debugging or whatever instead, just do (RUN! '(RESET)) instead of (RUN!
+'(DUMP ...)).  This should start a read-eval-print loop.

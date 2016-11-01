@@ -1,0 +1,90 @@
+; -*- Mode: Scheme; Syntax: Scheme; Package: bare-machine; -*-
+
+; This is file pbare.scm.
+
+;;;; The bare machine
+
+(lisp:import '(pseudoscheme::define[subst]  ;ouch
+	       lisp:the))
+
+(define unassigned
+  (let ((marker (list '<unassigned>)))
+    (lambda () marker)))
+
+(define[subst] (assert truth)
+  (if (not truth) (assertion-failed)))
+
+(define (assertion-failed)
+  (error "assertion failed"))
+
+; I/O
+
+(lisp:defun peek-char (lisp:&optional (port lisp:*standard-input*))
+  (lisp:peek-char #f port))
+
+(lisp:defparameter peek-char #'peek-char)
+
+(define write-string display)
+
+; 
+
+; Misc.
+
+(define[subst] %vector-ref  vector-ref)
+(define[subst] %vector-set! vector-set!)
+(define[subst] %vector-length vector-length)
+(define[subst] %vector-posq vector-posq)
+
+(define[subst] %make-string make-string)  ;Used by extract-string
+(define[subst] %string-set! string-set!)
+(define[subst] %make-vector make-vector)  ;Used by i/o system
+
+; 28-bit integer arithmetic primitives
+
+(lisp:deftype 28bit () `(lisp:signed-byte 28))
+
+(define[subst] (+& x y)
+  (the (28bit) (+ (the (28bit) x) (the (28bit) y))))
+
+(define[subst] (-& x y)
+  (the (28bit) (- (the (28bit) x) (the (28bit) y))))
+
+(define[subst] (*& x y)
+  (the (28bit) (* (the (28bit) x) (the (28bit) y))))
+
+(define[subst] (=& x y)
+  (= (the (28bit) x) (the (28bit) y)))
+
+(define[subst] (<& x y)
+  (< (the (28bit) x) (the (28bit) y)))
+
+(define[subst] (<=& x y)
+  (<= (the (28bit) x) (the (28bit) y)))
+
+(define[subst] (>& x y)
+  (> (the (28bit) x) (the (28bit) y)))
+
+(define[subst] (>=& x y)
+  (>= (the (28bit) x) (the (28bit) y)))
+
+(define[subst] (quotient& x y)
+  (the (28bit) (quotient (the (28bit) x) (the (28bit) y))))
+
+(define[subst] (remainder& x y)
+  (the (28bit) (remainder (the (28bit) x) (the (28bit) y))))
+
+(define[subst] (adjoin-bits high low k)
+  (+& (lisp:ash (the (28bit) high) k) low))
+
+(define[subst] (high-bits n k)
+  (the (28bit) (lisp:ash (the (28bit) n) (- k))))
+
+(define[subst] (low-bits n k)
+  (the (28bit)
+       (lisp:logand n (the (28bit)
+			   (- (the (28bit) (lisp:ash 1 k)) 1)))))
+
+(define[subst] (logand x y)
+  (the (28bit)
+       (lisp:logand (the (28bit) x) (the (28bit) y))))
+  

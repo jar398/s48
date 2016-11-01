@@ -1,0 +1,66 @@
+; -*- Mode: Scheme; Syntax: Scheme; Package: Scheme  -*-
+
+; This is file user.scm.
+
+;;;; Set up the user's environment
+
+(define user-initial-environment (make-empty-environment))
+
+(set! *current-environment* user-initial-environment)
+
+(for-each (lambda (name)
+	    (environment-set! user-initial-environment
+			      name
+			      (environment-ref system-environment name)))
+	  '(
+	    ;;----------------
+	    ;;  Unimplemented non-essential features:
+	    ;;     acos angle atan ceiling
+	    ;;     char-ci<=? char-ci<? char-ci=? char-ci>=? char-ci>?
+	    ;;     char-ready?
+	    ;;     cos denominator exact->inexact exp floor gcd
+	    ;;     imag-part inexact->exact lcm log magnitude make-polar
+	    ;;     make-rectangular modulo
+	    ;;     number->string                 ;Important
+	    ;;     numerator rationalize real-part round sin sqrt
+	    ;;     string->number
+	    ;;     string-ci<=? string-ci<? string-ci>=? string-ci>?
+	    ;;     string-copy string-fill!
+	    ;;     tan
+	    ;;     transcript-on transcript-off   ;Important
+	    ;;     truncate
+	    ;;----------------
+	    ;; Nonstandard features:
+	    error eval user-initial-environment
+	    system-environment  ;A necessary and sufficient loophole
+	    ;;----------------
+	    ;; Entries are in alphabetical order.
+	    * + - / < <= = > >= abs append apply assoc assq assv
+	    boolean?
+	    caaaar caaadr caadar caaddr caaar caadr caar
+	    cadaar cadadr caddar cadddr cadar caddr cadr
+	    call-with-current-continuation call-with-input-file
+	    call-with-output-file car
+	    cdaaar cdaadr cdadar cdaddr cdaar cdadr cdar
+	    cddaar cddadr cdddar cddddr cddar cdddr cddr
+	    cdr char->integer char-alphabetic? char-downcase
+	    char-lower-case? char-numeric? char-upcase
+	    char-upper-case? char-whitespace? char<=? char<? char=?
+	    char>=? char>? char? close-input-port close-output-port
+	    complex? cons current-input-port current-output-port
+	    denominator display eof-object? eq? equal? eqv? even?
+	    exact->inexact exact? expt for-each force inexact->exact
+	    inexact? input-port? integer->char integer? last-pair
+	    length list list->string list->vector list-ref list-tail
+	    load	;Should be user interface...
+	    make-string make-vector map max member memq memv min
+	    negative? newline nil not null? number? numerator odd?
+	    open-input-file open-output-file output-port? pair?
+	    peek-char positive?  procedure? quotient rational? read
+	    read-char real-part real? remainder reverse set-car!
+	    set-cdr! string->list string->symbol string-length
+	    string-ref string-set! string=? string? symbol->string
+	    symbol? t vector vector->list vector-fill! vector-length
+	    vector-ref vector-set! vector? with-input-from-file
+	    with-output-to-file write write-char zero?
+	    ))

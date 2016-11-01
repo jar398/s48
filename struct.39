@@ -1,0 +1,210 @@
+; -*- Mode: Scheme; Syntax: Scheme; Package: data; -*-
+
+; This is file struct.scm.
+
+;;;; Structure definitions
+
+; This file defines a level of abstraction for storage somewhat higher
+; than that of d-vectors and b-vectors: pairs, symbols, and other datatypes.
+
+(declare (do-not-integrate
+	    extract-string
+	    string-hash
+	    intern
+	    lookup
+	    string=?))
+
+(define-enumeration stob
+  (;; D-vector types (traced by GC)
+   pair
+   symbol
+   vector
+   closure
+   cell
+   port
+   ratio         ; pad this out so that there are eight d-vector types
+   d-unused-1
+
+   ;; B-vector types (not traced by GC)
+   string        ; = least b-vector type
+   code-vector
+   double        ;double precision floating point
+   bignum
+   ))
+
+(define least-b-vector-type stob/string)
+
+;; (assert (>= (expt 2 header-type-field-width)
+;;	       (%vector-length stob)))
+
+
+(define-macro (d-vector type . args)
+  `(let ((-v- (make-d-vector ,type ,(length args))))
+     ,@(do ((a args (cdr a))
+	    (i 0 (+ i 1))
+	    (z '() (cons `(d-vector-set! -v- ,i ,(car a)) z)))
+	   ((null? a) (reverse z)))
+     -v-))
+
+(define-macro (define-primitive-structure-type type make . body)
+  (let* ((num  (concatenate-symbol 'stob/ type))
+	 (pred (concatenate-symbol type '?))
+	 (size (concatenate-symbol type '-size))
+	 (shorten (lambda (l1 l2) (map (lambda (x1 x2) x2 x1) l1 l2)))
+	 (vars (shorten `(a b c d e f g) body)))
+    `(begin (define (,make ,@vars)
+	      (d-vector ,num ,@vars))
+	    (define ,pred (stob-predicate ,num))
+	    (define ,size (cells->a-units ,(+ (length body) 1)))
+	    ,@(do ((s body (cdr s))
+		   (i 0 (+ i 1))
+		   (d '() (let* ((slot (car s))
+				 (d (cons `(define (,(car slot) x)
+					     (d-vector-ref x ,i))
+					  d)))
+			    (if (null? (cdr slot))
+				d
+				(cons `(define (,(cadr slot) x val)
+					 (d-vector-set! x ,i val))
+				      d)))))
+		  ((null? s) (reverse d))))))
+
+(define (stob-predicate type)
+  (lambda (obj) (stob-of-type? obj type)))
+
+; Synchronize this with prim.scm.
+
+(define-primitive-structure-type pair cons
+  (car set-car!)
+  (cdr set-cdr!))
+
+(define-primitive-structure-type symbol make-symbol
+  (symbol->string))
+
+(define-primitive-structure-type closure make-closure
+  (closure-template)
+  (closure-env))
+
+(define-primitive-structure-type cell make-cell
+  (contents set-contents!)
+  (cell-name))
+
+(define-primitive-structure-type port make-port
+  (port-mode set-port-mode!)
+  (port-index set-port-index!)
+  (peeked-char set-peeked-char!)
+  (port-id))
+
+(define (length l)			;used by APPLY.
+  (let loop ((l l) (i 0))
+    (if (eq? l null)
+	i
+	(loop (cdr l) (+& i 1)))))
+
+; Vectors
+
+(define (make-vector len) (make-d-vector stob/vector len))
+(define-macro (vector . args) `(d-vector stob/vector ,@args))
+(define vector?       (stob-predicate stob/vector))
+(define vector-length d-vector-length)
+(define vector-ref    d-vector-ref)
+(define vector-set!   d-vector-set!)
+
+(define (vector-size len)
+  (addr1+ (cells->a-units len)))
+
+(define (vector-fill! v val)		;used by INITIALIZE-TRANSPORTER
+  (do ((i 0 (+& i 1)))
+      ((=& i (vector-length v)) v)
+    (vector-set! v i val)))
+
+; Code vectors
+
+(define (make-code-vector len) (make-b-vector stob/code-vector len))
+(define code-vector?	    (stob-predicate  stob/code-vector))
+(define code-vector-length b-vector-length)
+(define code-vector-ref    b-vector-ref)
+(define code-vector-set!   b-vector-set!)
+
+(define (code-vector-size len)
+  (addr1+ (bytes->a-units len)))
+
+; Strings
+
+(define (make-string len) (make-b-vector stob/string len))
+(define string?       (stob-predicate  stob/string))
+(define string-length b-vector-length)
+(define string-ref    (lambda (s i) (ascii->char (b-vector-ref s i))))
+(define string-set!   (lambda (s i c) (b-vector-set! s i (char->ascii c))))
+
+(define string-size code-vector-size)
+
+(define (extract-string string)		; used by OPEN, WRITE-STRING, SUSPEND
+  (let ((z (string-length string)))
+    (let ((v (%make-string z)))
+      (do ((i 0 (+& i 1)))
+          ((>=& i z) v)
+        (%string-set! v i (string-ref string i))))))
+
+(define string=? stob-equal?)
+
+; Hashing
+
+; The hash function used here is to take the sum of the ascii values
+; of the characters in the string, modulo the symbol table size.
+;
+; This hash function was also compared against some others, e.g.
+; adding in the length as well, and taking only the odd or only the
+; even characters.  It fared about the same as adding the length, and
+; much better than examining only every other character.
+;
+; Perhaps a hash function that is sensitive to the positions of the
+; characters should be tried?  (Consider CADDR, CDADR, CDDAR.)
+;
+; Of course, if we switched to rehashing, a prime modulus would be
+; important.
+
+(define (string-hash s)
+  (let ((n (string-length s)))
+    (do ((i 0 (+& i 1))
+         (h 0 (+& h (char->ascii (string-ref s i)))))
+        ((>=& i n) h))))
+
+; Symbol table and environment lookup
+
+(define (table-searcher hash match? make-new)
+  ;; In FX terms, this procedure has type
+  ;;          (poly (t1 t2 t3)
+  ;;            (proc ((proc (t1) int)     ;hash
+  ;;                   (proc (t1 t2) bool) ;match?
+  ;;                   (proc (t1) t2))     ;make-new
+  ;;              (proc (t1 (vector-of (list-of t2)))
+  ;;                t2)))
+  ;; For the symbol table, t1 = string, t2 = t3 = symbol.
+  (lambda (obj table)
+    (let* ((index (logand (hash obj) (- (vector-length table) 1)))
+           (bucket (vector-ref table index)))
+      (let loop ((b bucket))
+        (cond ((eq? b null)
+               (let ((new (make-new obj)))
+                 (vector-set! table index (cons new bucket))
+		 new))
+              ((match? obj (car b)) (car b))
+              (else (loop (cdr b))))))))
+
+(define intern
+  (table-searcher string-hash
+                  (lambda (string sym)
+                    (string=? string (symbol->string sym)))
+                  make-symbol))
+
+(define xlookup
+  (table-searcher (lambda (sym) (string-hash (symbol->string sym)))
+                  (lambda (sym cell)
+                    (eq? sym (cell-name cell)))
+                  (lambda (sym) (make-cell unbound-marker sym))))
+
+(define (lookup env sym) (xlookup sym env))
+
+; Eventually, perhaps: make-table, table-ref, table-set!
+

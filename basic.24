@@ -1,0 +1,370 @@
+; -*- Mode: Scheme; Syntax: Scheme; Package: Scheme; -*-
+
+; This is file basic.scm.
+
+;;;; Fundamental definitions
+
+(define-all-compiler-primitives)
+
+; Scalar operations
+
+(define t   (= 0 0))
+(define nil (= 0 1))
+(define (not x) (if x nil t))
+(define (boolean? x) (or (eq? x t) (eq? x nil)))
+
+; The value returned by SET! is unspecified.
+
+(define unspecified (let ((x 0)) (set! x 1)))
+
+; Operational equivalence  [eq? is primitive]
+
+(define eqv? eq?)
+
+; Numbers  [primitive: = < + * - quotient remainder]
+
+(define integer?  fixnum?)
+(define rational? integer?)
+(define real?	  rational?)
+(define complex?  real?)
+(define number?   complex?)
+
+(define (zero? x) (= x 0))
+(define (positive? x) (< 0 x))
+(define (negative? x) (< x 0))
+(define (even? n) (= 0 (remainder n 2)))
+(define (odd? n) (not (even? n)))
+(define (exact? n) t)      ;?
+(define (inexact? n) nil)
+
+(define (> x y) (< y x))
+(define (<= x y) (not (< y x)))
+(define (>= x y) (not (< x y)))
+
+(define (max x y) (if (< x y) y x))
+(define (min x y) (if (< x y) x y))
+
+(define (/ x y)
+  (if (= (remainder x y) 0)
+      (quotient x y)
+      (error "ratios not yet implemented" `(/ x y))))
+(define (abs n) (if (< n 0) (- 0 n) n))
+
+(define (expt n p)   ;losing algorithm, fix later
+  (do ((a 1 (* a n))
+       (p p (- p 1)))
+      ((<= p 0) a)))
+
+; Lists  [primitive: pair? cons car cdr set-car! set-cdr!]
+
+(define (caar   x) (car (car x)))
+(define (cadr   x) (car (cdr x)))
+(define (cdar   x) (cdr (car x)))
+(define (cddr   x) (cdr (cdr x)))
+
+(define (caaar  x) (car (caar x)))
+(define (caadr  x) (car (cadr x)))
+(define (cadar  x) (car (cdar x)))
+(define (caddr  x) (car (cddr x)))
+(define (cdaar  x) (cdr (caar x)))
+(define (cdadr  x) (cdr (cadr x)))
+(define (cddar  x) (cdr (cdar x)))
+(define (cdddr  x) (cdr (cddr x)))
+
+(define (caaaar x) (car (caaar x)))
+(define (caaadr x) (car (caadr x)))
+(define (caadar x) (car (cadar x)))
+(define (caaddr x) (car (caddr x)))
+(define (cadaar x) (car (cdaar x)))
+(define (cadadr x) (car (cdadr x)))
+(define (caddar x) (car (cddar x)))
+(define (cadddr x) (car (cdddr x)))
+(define (cdaaar x) (cdr (caaar x)))
+(define (cdaadr x) (cdr (caadr x)))
+(define (cdadar x) (cdr (cadar x)))
+(define (cdaddr x) (cdr (caddr x)))
+(define (cddaar x) (cdr (cdaar x)))
+(define (cddadr x) (cdr (cdadr x)))
+(define (cdddar x) (cdr (cddar x)))
+(define (cddddr x) (cdr (cdddr x)))
+
+(define (null? x) (eq? x '()))
+
+(define (list . l) l)
+
+(define (length l)
+  (do ((l l (cdr l))
+       (i 0 (+ i 1)))
+      ((null? l) i)))
+
+(define (append . lists)
+  (letrec ((append2 (lambda (l1 l2)
+		      (if (null? l1) l2
+			  (cons (car l1) (append2 (cdr l1) l2))))))
+    (cond ((null? lists) '())
+          ((null? (cdr lists)) (car lists))
+          ((null? (cddr lists)) (append2 (car lists) (cadr lists)))
+          (else (append2 (car lists) (apply append (cdr lists)))))))
+
+(define (reverse list)
+  (letrec ((append-reverse
+	     (lambda (list seed)
+	       (if (null? list)
+		   seed
+		   (append-reverse (cdr list) (cons (car list) seed))))))
+    (append-reverse list '())))
+
+(define (list-tail l index)
+  (let loop ((l l) (i index))
+    (cond ((= i 0) l)
+	  (else (loop (cdr l) (- i 1))))))
+
+(define (list-ref l k)
+  (car (list-tail l k)))
+
+(define (last-pair l)
+  (let loop ((l l))
+    (if (not (pair? (cdr l))) 
+	l
+	(loop (cdr l)))))
+
+(define (equal? obj1 obj2)
+  (cond ((eqv? obj1 obj2) t)
+        ((pair? obj1)
+         (and (pair? obj2)
+	      (equal? (car obj1) (car obj2))
+	      (equal? (cdr obj1) (cdr obj2))))
+	((string? obj1)
+	 (and (string? obj2)
+	      (string=? obj1 obj2)))
+	((vector? obj1)
+	 (and (vector? obj2)
+	      (let ((z (vector-length obj1)))
+		(and (= z (vector-length obj2))
+		     (let loop ((i 0))
+		       (cond ((= i z) t)
+			     ((equal? (vector-ref obj1 i) (vector-ref obj2 i))
+			      (loop (+ i 1)))
+			     (else nil)))))))
+        (else nil)))
+
+(define (mem pred)
+  (lambda (obj l)
+    (let loop ((l l))
+	 (cond ((null? l) nil)
+	       ((pred obj (car l)) l)
+	       (else (loop (cdr l)))))))
+
+(define memq   (mem eq?))
+(define memv   (mem eqv?))
+(define member (mem equal?))
+
+(define (ass pred)
+  (lambda (obj l)
+    (let loop ((l l))
+      (cond ((null? l) nil)
+	    ((pred obj (caar l)) (car l))
+	    (else (loop (cdr l)))))))
+
+(define assq  (ass eq?))
+(define assv  (ass eqv?))
+(define assoc (ass equal?))
+
+(define (delq obj l)
+  (cond ((null? l) l)
+	((eq? obj (car l)) (delq obj (cdr l)))
+	(else (cons (car l) (delq obj (cdr l))))))
+
+; Characters  [primitive:  char? char->ascii ascii->char char=? char<?]
+
+(define (char>? x y) (char<? y x))
+(define (char>=? x y) (not (char<? x y)))
+(define (char<=? x y) (not (char<? y x)))
+(define char->integer char->ascii)
+(define integer->char ascii->char)
+
+(define ay      (char->integer #\a))
+(define zed     (char->integer #\z))
+(define cap-ay  (char->integer #\A))
+(define cap-zed (char->integer #\Z))
+(define zero    (char->integer #\0))
+(define nine    (char->integer #\9))
+
+(define (char-whitespace? c)
+  (or (char=? c #\space)
+      (char=? c #\newline)
+      (char=? c #\tab)
+      (char=? c #\page)))
+
+(define (char-lower-case? c)
+  (let ((c (char->ascii c)))
+    (and (>= c ay)
+	 (<= c zed))))
+
+(define (char-upper-case? c)
+  (let ((c (char->ascii c)))
+    (and (>= c cap-ay)
+	 (<= c cap-zed))))
+
+(define (char-numeric? c)
+  (let ((c (char->ascii c)))
+    (and (>= c zero)
+	 (<= c nine))))
+
+(define (char-alphabetic? c)
+  (or (char-upper-case? c)
+      (char-lower-case? c)))
+
+(define (char-upcase c)
+  (if (char-lower-case? c)
+      (ascii->char (- (char->ascii c) (- ay cap-ay)))
+      c))
+
+(define (char-downcase c)
+  (if (char-upper-case? c)
+      (ascii->char (+ (char->ascii c) (- ay cap-ay)))
+      c))
+
+(define (digit c radix)	  ;Auxiliary for reader
+  (let ((c (char->integer (char-upcase c))))
+    (cond ((and (>= c zero)
+                (<= c nine))
+           (- c zero))
+          ((and (> radix 10)
+                (>= c cap-ay)
+                (< c (+ cap-ay (- radix 10))))
+           (+ (- c cap-ay) 10))
+          (else nil))))
+
+; Strings
+
+(define (substring s start end)
+  (let ((new-string (make-string (- end start))))
+    (do ((i start (+ i 1))
+	 (j 0 (+ j 1)))
+	((= i end) new-string)
+      (string-set! new-string j (string-ref s i)))))
+
+(define (string-append s1 s2)  ;Wants to be n-ary
+  (let ((l1 (string-length s1))
+	(l2 (string-length s2)))
+    (let ((new-string (make-string (+ l1 l2))))
+      (do ((i 0 (+ i 1)))
+	  ((= i l1)
+	   (do ((i i (+ i 1))
+		(j 0 (+ j 1)))
+	       ((= j l2) new-string)
+	     (string-set! new-string i (string-ref s2 j))))
+	(string-set! new-string i (string-ref s1 i))))))
+
+(define (string->list v)
+  (let ((z (string-length v)))
+    (do ((i (- z 1) (- i 1))
+	 (l '() (cons (string-ref v i) l)))
+	((< i 0) l))))
+
+(define (list->string l)
+  (let ((v (make-string (length l))))
+    (do ((i 0 (+ i 1))
+	 (l l (cdr l)))
+	((null? l) v)
+      (string-set! v i (car l)))))
+
+(define (string<? s1 s2)
+  (let ((l1 (string-length s1))
+	(l2 (string-length s2)))
+    (let ((z (min l1 l2)))
+      (let loop ((i 0))
+	(cond ((= i z) (< l1 l2))
+	      ((char<? (string-ref s1 i) (string-ref s2 i)) t)
+	      (else (loop (+ i 1))))))))
+
+(define (string>? s1 s2) (string<? s2 s1))
+(define (string<=? s1 s2) (not (string>? s1 s2)))
+(define (string>=? s1 s2) (not (string<? s1 s2)))
+
+(define (string->symbol string)
+  (intern string the-symbol-table))
+
+;(define (reverse-list->string l n)   ;In microcode?
+;  (do ((l l (cdr l))
+;       (i (- n 1) (- i 1)))
+;      ((< i 0) (return obj))
+;    (string-set! obj i (car l))))
+
+(define (string-find-if pred string)
+  (let loop ((i 0))
+    (cond ((>= i (string-length string)) nil)
+	  ((pred (string-ref string i)) i)
+	  (else (loop (+ i 1))))))
+
+; Vectors
+
+(define (vector . l)
+  (list->vector l))
+
+(define (vector->list v)
+  (let ((z (vector-length v)))
+    (do ((i (- z 1) (- i 1))
+	 (l '() (cons (vector-ref v i) l)))
+	((< i 0) l))))
+
+(define (list->vector l)
+  (let ((v (make-vector (length l) nil)))
+    (do ((i 0 (+ i 1))
+	 (l l (cdr l)))
+	((null? l) v)
+      (vector-set! v i (car l)))))
+
+(define (vector-fill! v x)       ;Not essential, but useful
+  (let ((z (vector-length v)))
+    (do ((i 0 (+ i 1)))
+	((= i z) unspecified)
+      (vector-set! v i x))))
+
+(define (vector-posq thing v)    ;Useful
+  (let loop ((i 0))
+    (cond ((>= i (vector-length v)) nil)
+	  ((eq? thing (vector-ref v i)) i)
+	  (else (loop (+ i 1))))))
+
+; Control features
+
+(define procedure? closure?)
+
+(define (map proc l)
+  (if (null? l)
+      '()
+      (cons (proc (car l)) (map proc (cdr l)))))
+
+(define (for-each proc l)
+  (if (null? l)
+      unspecified
+      (begin (proc (car l))
+	     (for-each proc (cdr l)))))
+
+(define (make-promise thunk)
+  (let ((already-run? nil) (result nil))
+    (lambda ()
+      (cond ((not already-run?)
+	     (set! result (thunk))
+	     (set! already-run? t)))
+      result)))
+
+(define (force promise)
+  (promise))
+
+; Tables (not a standard Scheme feature, but a handy one)
+
+(define (make-table)
+  (list 'table))
+
+(define (table-ref table key)
+  (let ((probe (assq key (cdr table))))
+    (if probe (cdr probe) nil)))
+
+(define (table-set! table key val)
+  (let ((probe (assq key (cdr table))))
+    (if probe
+	(set-cdr! probe val)
+	(set-cdr! table (cons (cons key val) (cdr table))))))

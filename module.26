@@ -1,0 +1,360 @@
+; -*- Mode: Scheme; Syntax: Scheme; Package: Scheme; -*-
+
+; This is file module.scm.
+
+;;;; Signatures, structures, functors
+
+; Those with weak stomachs should read no further!
+
+(define (get-clause clauses kw)
+  (let ((probe (assq kw clauses)))
+    (if probe (cdr probe) '())))
+
+; Signatures
+;  (Add macros at some point.)
+;  (Figure out later what namespace signature names go into.)
+;  (Also figure out later what to do if the definition of a signature
+;  changes.)
+
+(define-macro (define-signature name . clauses)
+  `(define ,name
+     (find-or-make-signature ',name ',(get-clause clauses 'values))))
+
+(define (find-or-make-signature name vars)
+  (if (and (lisp:boundp name)
+	   (signature? (lisp:symbol-value name)))
+      (let ((sig (lisp:symbol-value name)))
+	(set-signature-vars! sig vars)
+	(for-each establish-exports!
+		  (structures-with-signature sig))
+	sig)
+      (vector 'signature name vars '())))
+
+(define (signature? obj)
+  (and (vector? obj) (eq? (vector-ref obj 0) 'signature)))
+(define (signature-name sig) (vector-ref sig 1))
+(define (signature-vars sig) (vector-ref sig 2))
+(define (set-signature-vars! sig vars) (vector-set! sig 2 vars))
+(define (structures-with-signature sig) (vector-ref sig 3))
+
+(define (set-signature-dependent! sig struct)
+  (let ((deps (structures-with-signature sig)))
+    (if (not (memq struct deps))
+	(vector-set! sig 3 (cons struct deps))))
+  #t)
+
+; Structures
+
+(define-macro (define-structure name sig . body)
+  `(define ,name
+     (find-or-make-structure ',name
+			     ,sig
+			     (lambda () ,@body))))
+
+(define (find-or-make-structure name sig body)
+  (let ((struct (or (lisp:find-package name)
+		    (begin (lisp:format t "~&Creating package ~A" name)
+			   (lisp:make-package name :use '("SUBSTRATE"))))))
+    (initialize-structure! struct name sig body)
+    struct))
+
+(define (structure-package struct) struct)
+
+; Initialization & consistency maintenance
+
+(define (initialize-structure! struct name sig body)
+  (let ((p (structure-package struct)))
+    (lisp:setf (lisp:symbol-value (lisp:intern "--NAME--" p))
+	       name)
+    (lisp:setf (lisp:symbol-value (lisp:intern "--SIGNATURE--" p))
+	       sig)
+    (set-signature-dependent! sig struct)
+    (with-package p body)
+    ;; This must happen *after* execution of any use-package's in body.
+    (establish-exports! struct)))
+
+(define (structure-name struct)
+  (lisp:symbol-value (lisp:intern "--NAME--"
+				  (structure-package struct))))
+
+(define (structure-signature struct)
+  (lisp:symbol-value (lisp:intern "--SIGNATURE--"
+				  (structure-package struct))))
+
+(define (establish-exports! struct)
+  (let* ((p (structure-package struct))
+	 (syms (map (lambda (var)
+		      (lisp:intern (symbol->string var) p))
+		    (signature-vars (structure-signature struct)))))
+    ;; Unexport expired symbols
+    (for-each-external-symbol
+       (lambda (sym)
+	 (if (not (memq sym syms))
+	     (begin (lisp:format t "~&Unexporting ~S" sym)
+		    (lisp:unexport sym p))))
+       p)
+    (for-each (lambda (sym)
+		(if (not (or (lisp:boundp sym)
+			     (lisp:macro-function sym)))
+		    (lisp:format lisp:*error-output*
+				 "~&Warning: ~A not bound in structure ~A"
+				 sym (structure-name struct)))
+		(lisp:export sym p))
+	      syms)))
+
+; (structure-ref struct name) is like struct.name in ML or struct:name
+; in Common Lisp.
+
+(define-macro (structure-ref struct name)
+  `(*structure-ref ,struct ',name))
+
+(define-macro (structure-set! struct name val)
+  `(*structure-set! ,struct ',name ,val))
+
+(lisp:defun *structure-ref (struct name)
+  (lisp:symbol-value (structure-symbol struct name)))
+
+(lisp:defun *structure-set! (struct name val)
+  (lisp:setf (lisp:symbol-value (structure-symbol struct name))
+	     val))
+
+(lisp:defun structure-symbol (struct name)
+  (lisp:multiple-value-bind (sym status)
+        (lisp:find-symbol (symbol->string name) (structure-package struct))
+    (if (not (eq? status :external))
+	(error "symbol not exported -- STRUCTURE-REF"
+	       struct
+	       name))
+    sym))
+
+; WITH-PACKAGE
+
+(lisp:defun with-package (p thunk)
+  (lisp:let ((lisp:*package* (lisp:find-package p)))
+    (lisp:funcall thunk)))
+
+; DECLARE.
+
+(define-macro (declare . rest) rest ''declare)
+
+; Substrate package: symbols that occur in all structure packages.
+
+(lisp:eval-when (lisp:eval lisp:load lisp:compile)
+(define substrate-package 
+  (or (lisp:find-package "SUBSTRATE")
+      (lisp:make-package "SUBSTRATE" :use '())))
+
+(define scheme-keywords
+  '(
+    ;; Syntactic keywords
+    quote lambda if set!
+    let let* letrec begin
+    cond and or case
+    do delay
+    quasiquote
+    define else => unquote unquote-splicing
+    ;; For module system
+    include open-structure
+    structure-ref structure-set!
+    ;; Pseudoscheme features
+    define-macro error declare
+    ))
+)
+
+(lisp:import scheme-keywords substrate-package)
+(lisp:export scheme-keywords substrate-package)
+
+(define-macro (hacked-define-macro pat . body)
+  `(define-macro (,(car pat) ,@(intern-recursively-in-scheme-package
+				  (cdr pat)))
+     ,@(intern-recursively-in-scheme-package body)))
+
+(define (intern-recursively-in-scheme-package exp)
+  (let ((scheme-package (lisp:find-package 'scheme)))
+    (letrec ((recur (lambda (exp level)
+		      (cond ((and (symbol? exp)
+				  (= level 0))
+			     (lisp:intern (symbol->string exp)
+					  scheme-package))
+			    ((not (pair? exp)) exp)
+			    ((eq? (car exp) 'quasiquote)
+			     (cons (car exp)
+				   (recur (cdr exp) (+ level 1))))
+			    ((memq (car exp) '(unquote unquote-splicing))
+			     (cons (car exp)
+				   (recur (cdr exp) (- level 1))))
+			    (else
+			     (cons (recur (car exp) level)
+				   (recur (cdr exp) level)))))))
+      (recur exp 0))))
+
+(lisp:let ((defmac (lisp:intern "DEFMACRO" substrate-package)))
+  (lisp:export defmac substrate-package)
+  (lisp:setf (lisp:macro-function defmac)
+	     (lisp:macro-function 'hacked-define-macro)))
+
+; Useful things to put in the body of a define-structure:
+
+(define-macro (include . files)
+  `(begin ,@(map (lambda (file)
+		   ;; `(lf ',file)
+		   `(load-recompiling-if-necessary ',file)
+		   )
+		 files)))
+
+(define (open-structure . structs)
+  (for-each (lambda (struct)
+	      (let ((p (structure-package struct)))
+		(if (not (eq? lisp:*package* p))
+		    (lisp:use-package p))))
+	    structs))
+
+; Functors
+
+(define-macro (define-functor pat sig . body)
+  (let ((name (car pat))
+	(params (cdr pat)))
+    `(define (,name ,@(map car params))
+       (find-or-make-structure
+	  (pseudoscheme::concatenate-symbol
+		      ',name
+		      ,@(apply append (map (lambda (param)
+					     `('/ (structure-name ,(car param))))
+					   params)))
+	  ,sig
+	  (lambda ()
+	    ,@(map (lambda (param)
+		     `(process-functor-parameter ',(car param)
+						 ,(car param)
+						 ,(cadr param)))
+		   params)
+	    ,@body)))))
+
+(define (process-functor-parameter name struct sig)
+  (if (not (eq? (structure-signature struct) sig))
+      (error "functor parameter has wrong signature"
+	     struct sig))
+  (let ((sym (lisp:intern (symbol->string name))))
+    (lisp:setf (lisp:symbol-value sym) struct)))
+
+; Cope with disgustingness of #+
+(lisp:eval-when (lisp:eval lisp:load lisp:compile)
+  (lisp:when (lisp:member "DEC" lisp:*features*
+			  :test (lambda (d f)
+				  (string=? d (symbol->string f))))
+	     (lisp:pushnew 'dec lisp:*features*)))
+
+(define (load-recompiling-if-necessary f)
+  (if f
+      (let* ((src (lisp:merge-pathnames f (lisp:make-pathname
+					   :type "SCM")))
+	     (src? (lisp:probe-file src))
+	     (obj (lisp:merge-pathnames f (lisp:make-pathname
+					   :type #+DEC "FAS" #-DEC "BIN")))
+	     (obj? (lisp:probe-file obj)))
+	(if (not src?)
+	    (error "file not found" (lisp:namestring src)))
+	(let ((obj
+	       (cond ((memq f '(arch stob package)) src?)
+		     ((or (not obj?)
+			  (< (lisp:file-write-date obj?)
+			     (lisp:file-write-date src?)))
+		      (compile-file src?
+				    :optimize '((lisp:speed 3) (lisp:safety 0))
+				    :listing t)
+		      (lisp:truename obj))
+		     (else obj?))))
+	  (lisp:format t "~&Loading ~A" (lisp:namestring obj))
+	  (load obj :verbose nil)))))
+
+(define (lrin f . struct-option)
+  (with-package (if (not (null? struct-option))
+		    (car struct-option)
+		    lisp:*package*)
+    (lambda ()
+      (load-recompiling-if-necessary f))))
+
+(define (cf f . struct-option)
+  (with-package (if (not (null? struct-option))
+		    (car struct-option)
+		    lisp:*package*)
+    (lambda ()
+      (compile-file (lisp:merge-pathnames f (lisp:make-pathname :type "SCM"))
+		    :optimize '((lisp:speed 3) (lisp:safety 0))
+		    :listing t))))
+
+(define (lf f . struct-option)
+  (with-package (if (not (null? struct-option))
+		    (car struct-option)
+		    lisp:*package*)
+    (lambda ()
+      (load (lisp:merge-pathnames f (lisp:make-pathname :type "SCM"))
+	    :verbose nil))))
+
+; Debugging package management!
+
+(lisp:eval-when (lisp:eval lisp:load lisp:compile)
+(define debug-interaction-package
+  (or (lisp:find-package "DEBUG-INTERACTION")
+      (lisp:make-package "DEBUG-INTERACTION"
+			 :use '()
+			 :nicknames '("D"))))
+)
+
+(lisp:import '(
+	       ;; For convenience at top level
+	       load compile-file quit
+	       cf lf lrin
+	       lisp:in-package lisp:import lisp:export
+	       lisp:trace lisp:untrace
+	       #+DEC vax-lisp:debug
+	       #+DEC vax-lisp:continue
+	       see
+	       )
+	     debug-interaction-package)
+
+(lisp:import scheme-keywords debug-interaction-package)
+
+(define (see package)
+  (let ((flush-count 0)
+	(see-count 0)
+	(package (lisp:find-package package)))
+    (for-each-symbol
+      (lambda (sym)
+	(if (or (lisp:boundp sym)
+		(lisp:macro-function sym))
+	    (let ((existing (lisp:find-symbol (symbol->string sym)
+					      debug-interaction-package)))
+	      (if existing
+		  (if (not (eq? sym existing))
+		      (begin (lisp:unintern existing
+					    debug-interaction-package)
+			     (lisp:import sym debug-interaction-package)
+			     ;; (lisp:format t "~& bump ~a" sym)
+			     (set! flush-count (+ flush-count 1))))
+		  (begin (lisp:import sym debug-interaction-package)
+			 (set! see-count (+ see-count 1)))))))
+       package)
+    (lisp:format lisp:*error-output*
+		 "~&~D new, ~D bumped~&"
+		 see-count flush-count)
+    (lisp:values)))
+
+(lisp:defun for-each-symbol (proc pack)
+  (lisp:do-symbols (sym pack)
+    (lisp:funcall proc sym)))
+
+(lisp:defun for-each-external-symbol (proc pack)
+  (lisp:do-external-symbols (sym pack)
+    (lisp:funcall proc sym)))
+
+
+
+; R^3 Scheme structure
+
+(load "ssig.scm")			;Scheme signature
+
+(define-structure revised^3-scheme revised^3-scheme-sig
+  (lisp:use-package 'scheme))
+
+(lisp:defparameter scheme revised^3-scheme)

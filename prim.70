@@ -1,0 +1,313 @@
+; -*- Mode: Scheme; Syntax: Scheme; Package: S48; -*-
+
+; This is file prim.scm.
+
+;;;; VM data manipulation primitives
+
+(define-macro (define-primitive opcode input-types action . returner-option)
+  (let* ((shorten (lambda (l1 l2) (map (lambda (x1 x2) x2 x1) l1 l2)))
+	 (places (reverse (shorten `(*val* *arg2* *arg3* *arg4*) input-types)))
+         (nargs (length input-types)))
+    `(define-opcode ,opcode
+       (lambda ()
+	 ,@(if (>= nargs 2) `((set! *arg2* (pop))) `())
+	 ,@(if (>= nargs 3) `((set! *arg3* (pop))) `())
+	 ,@(if (>= nargs 4) `((set! *arg4* (pop))) `())
+	 (if (and ,@(map (lambda (in place)
+			   `((input-type-predicate ,in) ,place))
+			 input-types
+			 places))
+	     ,(let ((yow `(,action
+			   ,@(map (lambda (in place)
+				    `((input-type-coercion ,in) ,place))
+				  input-types
+				  places))))
+		(if (null? returner-option)
+		    yow
+		    `(,(car returner-option) ,yow)))
+	     (goto wrong-type-argument))))))
+
+; Input checking and coercion
+
+(define (wrong-type-argument)
+  (raise exception/wrong-type-argument))
+
+(define (input-type pred coercer)  ;Alonzo wins
+  (lambda (f) (f pred coercer)))
+
+(define (input-type-predicate type) (type (lambda (x y) y x)))
+(define (input-type-coercion type)  (type (lambda (x y) x y)))
+
+(define (no-coercion x) x)
+
+(define any->     (input-type (lambda (x) x #t) no-coercion))
+(define fixnum->  (input-type fixnum? extract-fixnum))
+(define char->    (input-type char?   extract-char))
+
+; Output coercion
+
+(define (return val)
+  (set! *val* val)
+  (goto interpret))
+
+(define ->any return)
+
+(define (->boolean x)
+  (return (enter-boolean x)))
+
+(define (->fixnum x)
+  (return (enter-fixnum x)))
+
+(define (->fixnum-carefully x)
+  (cond ((overflows? x)
+	 (raise exception/arithmetic-overflow))
+	(else
+	 (->fixnum x))))
+
+(define (->char x)
+  (return (enter-char x)))
+
+(define (->unspecified x)
+  x ;ignored
+  (return unspecified))
+
+; Scalar primitives
+
+(define-primitive op/eq?     (any-> any->) eq? ->boolean)
+(define-primitive op/fixnum? (any->) fixnum? ->boolean)
+
+(define-primitive op/+           (fixnum-> fixnum->) + ->fixnum-carefully)
+(define-primitive op/-           (fixnum-> fixnum->) - ->fixnum-carefully)
+(define-primitive op/*           (fixnum-> fixnum->) * ->fixnum-carefully)
+; Watch out for  (quotient most-negative-fixnum -1)
+(define-primitive op/quotient    (fixnum-> fixnum->) quotient ->fixnum-carefully)
+(define-primitive op/remainder   (fixnum-> fixnum->) remainder ->fixnum)
+(define-primitive op/=           (fixnum-> fixnum->) =   ->boolean)
+(define-primitive op/<           (fixnum-> fixnum->) <   ->boolean)
+(define-primitive op/char?       (any->) char? ->boolean)
+(define-primitive op/char=?      (char-> char->) char=? ->boolean)
+(define-primitive op/char<?      (char-> char->) char<? ->boolean)
+(define-primitive op/char->ascii (char->) char->ascii ->fixnum)
+
+; ASCII->CHAR ought to check that the input is in an appropriate
+; range, but doesn't.  Do we need a special exception type for this?
+; It's not exactly a type error.
+(define-primitive op/ascii->char (fixnum->) ascii->char ->char)
+
+(define-macro (define-primitive-structure-type type make . body)
+  (let* ((type-> (concatenate-symbol type '->))
+	 (type?  (concatenate-symbol type '?))
+	 (size   (concatenate-symbol type '-size))
+	 (op/    (lambda (name) (concatenate-symbol 'op/ name)))
+	 (shorten (lambda (l1 l2) (map (lambda (x1 x2) x2 x1) l1 l2)))
+	 (vars (shorten `(a b c d e f g) body)))
+    `(begin (define ,type-> (input-type ,type? no-coercion))
+	    (define-primitive ,(op/ type?) (any->) ,type? ->boolean)
+	    (define-primitive ,(op/ make) ,(map (lambda (var) var `any->) vars)
+	      (lambda ,vars
+		(ensure-space ,size
+		  (lambda ()
+		    (return (,make ,@vars))))))
+	    ,@(apply append
+		     (map (lambda (slot)
+			    (let ((get (car slot)))
+			      `((define-primitive ,(op/ get) (,type->) ,get return)
+				,@(if (null? (cdr slot))
+				      `()
+				      (let ((set (cadr slot)))
+					`((define-primitive ,(op/ set) (,type-> any->)
+					    ,set ->unspecified)))))))
+			  body)))))
+
+(define-primitive-structure-type pair cons
+  (car set-car!)
+  (cdr set-cdr!))
+
+(define-primitive-structure-type symbol make-symbol
+  (symbol->string))
+
+(define-primitive-structure-type closure make-closure
+  (closure-template)
+  (closure-env))
+
+(define-primitive-structure-type cell make-cell
+  (contents set-contents!)
+  (cell-name))
+
+
+(define-macro (define-vector-type type)
+  (let* ((type-> (concatenate-symbol type '->))
+	 (type?  (concatenate-symbol type '?))
+	 (size   (concatenate-symbol type '-size))
+	 (make   (concatenate-symbol 'make- type))
+	 (length (concatenate-symbol type '-length))
+	 (ref	 (concatenate-symbol type '-ref))
+	 (set	 (concatenate-symbol type '-set!))
+	 (op/    (lambda (name) (concatenate-symbol 'op/ name))))
+    `(begin (define ,type-> (input-type ,type? no-coercion))
+
+	    (define-primitive ,(op/ type?) (any->) ,type? ->boolean)
+
+	    (define-primitive ,(op/ length) (,type->) ,length ->fixnum)
+
+	    (define-primitive ,(op/ make) (fixnum-> any->)
+	      (lambda (len init)
+		(if (not (>=& len 0))
+		    (raise exception/wrong-type-argument)
+		    (ensure-space (,size len)
+		      (lambda ()
+			(let ((v (,make len)))
+			  ;; Clear out storage
+			  (do ((i (-& len 1) (-& i 1)))
+			      ((<& i 0)
+			       (return v))
+			    (,set v i init))))))))
+
+	    (define-primitive ,(op/ ref) (,type-> fixnum->)
+	      (lambda (v index)
+		(cond ((valid-index? index (,length v))
+		       (return (,ref v index)))
+		      (else
+		       (raise exception/index-out-of-range)))))
+
+	    (define-primitive ,(op/ set)
+	      (,type-> fixnum-> any->)
+	      (lambda (v index val)
+		(cond ((valid-index? index (,length v))
+		       (,set v index val)
+		       (return unspecified))
+		      (else
+		       (raise exception/index-out-of-range)))))
+	    )))
+
+(define-vector-type vector)
+(define-vector-type string)
+(define-vector-type code-vector)
+
+(define xstring->     (input-type string?      extract-string))
+
+; I/O primitives
+
+(define (input-port? obj)
+  (and (port? obj)
+       (=& (extract-fixnum (port-mode obj)) for-input)))
+
+(define (output-port? obj)
+  (and (port? obj)
+       (=& (extract-fixnum (port-mode obj)) for-output)))
+
+(define port->        (input-type port?        no-coercion))
+(define input-port->  (input-type input-port?  no-coercion))
+(define output-port-> (input-type output-port? no-coercion))
+
+(define (enter-char-or-eof c)
+  (if (eof-object? c)
+      eof-object
+      (enter-char c)))
+
+(define-primitive op/input-port? (any->) input-port? ->boolean)
+(define-primitive op/output-port? (any->) output-port? ->boolean)
+
+(define-primitive op/open-port (string-> fixnum->)
+  (lambda (filename mode)
+    (let ((index (find-port-index)))
+      (cond (index
+	     (set! *retrying-after-gc?* #f)
+	     (let* ((%port (cond ((=& mode for-output)
+				  (open-output-file (extract-string filename)))
+				 (else	;(=& mode for-input)
+				  (open-input-file (extract-string filename))))))
+	       (if %port
+		   (let ((port (make-port (enter-fixnum mode)
+					  (enter-fixnum index)
+					  false
+					  filename)))
+		     (use-port-index! index port %port)
+		     (return port))
+		   (raise exception/cannot-open))))
+	    (else
+	     (goto collect-and-retry))))))
+
+(define-primitive op/close-port (port->) close-port ->unspecified)
+
+(define-primitive op/read-char (input-port->)
+  (lambda (port)
+    (if (open? port)
+	(let ((c (peeked-char port)))
+	  (return (cond ((false? c)
+			 (enter-char-or-eof
+			   (read-char (extract-port port))))
+			(else
+			 (set-peeked-char! port false)
+			 c))))
+	(raise exception/operation-on-closed-port))))
+
+(define-primitive op/peek-char (input-port->)
+  (lambda (port)
+    (if (open? port)
+	(let ((c (peeked-char port)))
+	  (return (cond ((false? c)
+			 (let ((c (enter-char-or-eof
+				    (read-char (extract-port port)))))
+			   (set-peeked-char! port c)
+			   c))
+			(else c))))
+	(raise exception/operation-on-closed-port))))
+
+(define-primitive op/write-char (char-> output-port->)
+  (lambda (c port)
+    (if (open? port)
+	(begin (write-char c (extract-port port))
+	       (return unspecified))
+	(raise exception/operation-on-closed-port))))
+
+(define-primitive op/write-string (xstring-> output-port->)
+  (lambda (s port)
+    (if (open? port)
+	(begin (write-string s (extract-port port))
+	       (return unspecified))
+	(raise exception/operation-on-closed-port))))
+
+; Misc
+
+(define-primitive op/suspend
+  (xstring->) 
+  (lambda (filename)
+    (set! *val* unspecified)
+    (save-registers *root*)
+    (set! *filename* filename)
+    (set! *finished* (label really-suspend))
+    (goto collect)))
+
+(define (really-suspend)
+  (set! *finished* (label return-to-interpreter-after-gc))
+  (goto write-image))
+
+; Unnecessary primitives
+
+(define-primitive op/string=? (string-> string->) string=? ->boolean)
+
+; Special primitive called by the reader.
+; Primitive for the sake of speed.  Probably should be flushed.
+
+(define-primitive op/reverse-list->string
+  (any-> fixnum->) 
+  (lambda (l n)
+    (if (not (or (pair? l) (eq? l null)))
+	(goto wrong-type-argument)
+	(ensure-space (string-size n)
+	  (lambda ()
+	    (let ((obj (make-string n)))
+	      (do ((l l (cdr l))
+		   (i (-& n 1) (-& i 1)))
+		  ((<& i 0) (return obj))
+		(string-set! obj i (extract-char (car l))))))))))
+
+(define-primitive op/string-hash (string->) string-hash ->fixnum)
+
+(define-primitive op/intern (any-> any->) intern return)
+
+(define-primitive op/lookup (any-> any->) lookup return)
+
+; Eventually add make-table, table-ref, table-set! as primitives?
+; No -- write a compiler instead.

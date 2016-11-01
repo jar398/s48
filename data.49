@@ -1,0 +1,321 @@
+; -*- Mode: Scheme; Syntax: Scheme; Package: data; -*-
+
+; This is file data.scm.
+; Requires DEFINE-ENUMERATION macro.
+
+;;;; Data representations
+
+; This implementation of the data representations is particularly
+; tuned for byte-addressable machines with 4 bytes per word.
+; Good representations for other kinds of machines would necessarily
+; look quite different; e.g. on a word-addressed machine you might
+; want to put tag bits in the high end of a word, or even go to some
+; king of BIBOP system.
+
+
+; Descriptors
+;  A descriptor describes a Scheme object.
+;  A descriptor is represented as an integer whose low two bits are
+;  tag bits.  The high bits contain information whose format and
+;  meaning are dependent on the tag.
+
+(define tag-field-width 2)
+(define data-field-width (-& bits-per-cell tag-field-width))
+
+(define (make-descriptor tag data)
+  (adjoin-bits data tag tag-field-width))
+
+(define (descriptor-tag descriptor)
+  (low-bits descriptor tag-field-width))
+
+(define (descriptor-data descriptor)
+  (high-bits descriptor tag-field-width))
+
+(define eq? =&)
+
+; The four tags are: fixnum, immediate (character, boolean, etc.),
+; header (gives the type and size of a stored object), and stored
+; (pointer into memory).
+; The header and immediate tags could be multiplexed, thus freeing up
+; one of the 4 type codes for some other purpose, but the
+; implementation is simpler if they're not.
+
+(define-enumeration tag
+  (fixnum
+   immediate
+   header
+   stob))
+
+;; (assert (>= (expt 2 tag-field-width)
+;;	       (%vector-length tag)))
+
+(define (fixnum? descriptor)
+  (=& (descriptor-tag descriptor) tag/fixnum))
+
+(define (immediate? descriptor)
+  (=& (descriptor-tag descriptor) tag/immediate))
+
+(define (header? descriptor)
+  (=& (descriptor-tag descriptor) tag/header))
+
+(define (stob? descriptor)
+  (=& (descriptor-tag descriptor) tag/stob))
+
+; Fixnums
+
+(define bits-per-target-fixnum (- (* bits-per-cell) tag-field-width)) ;26 or 30
+(define    least-target-fixnum (- 0 (expt 2 bits-per-target-fixnum)))
+(define greatest-target-fixnum (- (expt 2 bits-per-target-fixnum) 1))
+
+(define (overflows? n)
+  (or (< n least-target-fixnum)
+      (> n greatest-target-fixnum)))
+
+(define (enter-fixnum n)
+  (assert (not (overflows? n)))
+  (make-descriptor tag/fixnum n))
+
+(define (extract-fixnum p)
+  (assert (fixnum? p))
+  (descriptor-data p))
+
+; Immediates
+;  The number 8 is chosen to streamline 8-bit-byte-oriented implementations.
+
+(define immediate-type-field-width
+  (-& 8 tag-field-width))
+
+(define (make-immediate type info)
+  (make-descriptor tag/immediate (adjoin-bits info
+					      type
+					      immediate-type-field-width)))
+
+(define (immediate-type imm)
+  (assert (immediate? imm))
+  (low-bits (descriptor-data imm)
+	    immediate-type-field-width))
+
+(define (immediate-info imm)
+  (assert (immediate? imm))
+  (high-bits (descriptor-data imm)
+	     immediate-type-field-width))
+
+(define-enumeration imm
+  (false      ; #f ()
+   true       ; #t
+   char
+   unspecified
+   undefined
+   eof))
+
+;; (assert (>= (expt 2 immediate-type-field-width)
+;;	       (%vector-length imm)))
+
+(define (immediate-predicate type)
+  (lambda (descriptor)
+    ;; Check low 8 bits...
+    (and (immediate? descriptor)
+	 (=& (immediate-type descriptor) type))))
+
+(define false?     (immediate-predicate imm/false))
+(define char?      (immediate-predicate imm/char))
+(define undefined? (immediate-predicate imm/undefined))
+
+(define true          (make-immediate imm/true 0))
+(define false         (make-immediate imm/false 0))
+(define null          (make-immediate imm/false 1))
+(define eof-object    (make-immediate imm/eof 0))
+(define unspecified   (make-immediate imm/unspecified 0))
+(define quiescent     (make-immediate imm/undefined 0))
+(define unbound-marker    (make-immediate imm/undefined 1))
+(define unassigned-marker (make-immediate imm/undefined 2))
+
+(define (enter-boolean b)
+  (if b true false))
+
+; Characters
+
+(define (enter-char c)
+  (make-immediate imm/char (char->ascii c)))
+
+(define (extract-char d)
+  (assert (char? d))
+  (ascii->char (immediate-info d)))
+
+(define (char=? x y)
+  (assert (and (char? x) (char? y)))
+  (=& x y))
+
+(define (char<? x y)
+  (assert (and (char? x) (char? y)))
+  (<& x y))
+
+; Headers
+;  The possible values for the type field are defined elsewhere.
+;  *** Eventually allow for an immutability bit, to prevent people
+;      from clobbering string print names and quoted structure.
+
+(define header-type-field-width (-& immediate-type-field-width 1))
+
+(define (make-header type length-in-bytes)
+  (make-descriptor tag/header (adjoin-bits length-in-bytes
+					   type
+					   header-type-field-width)))
+
+(define (header-type h)
+  (assert (header? h))
+  (low-bits (descriptor-data h)
+	    header-type-field-width))
+
+(define (header-length-in-bytes h)
+  (assert (header? h))
+  (high-bits (descriptor-data h)
+	     header-type-field-width))
+
+(define (header-length-in-cells header)
+  (bytes->cells (header-length-in-bytes header)))
+
+(define (header-a-units h)   ;Used by GC to find end of any object
+  (bytes->a-units (header-length-in-bytes h)))
+
+; Stored objects
+;  The data field of a descriptor for a stored object contains the
+;  cell number of the first cell after the object's header cell.
+
+(define (make-stob-descriptor addr)
+  (make-descriptor tag/stob (a-units->cells addr)))
+
+(define (address-after-header stob)
+  (assert (stob? stob))
+  (descriptor-data stob))
+
+; Accessing memory via stob descriptors
+
+(define (stob-ref stob index)
+  (fetch (addr+ (address-after-header stob) (cells->a-units index))))
+
+(define (stob-set! stob index value)
+  (store! (addr+ (address-after-header stob) (cells->a-units index))
+	  value))
+
+(define (stob-header stob)
+  (stob-ref stob -1))
+
+(define (stob-header-set! stob header)
+  (stob-set! stob -1 header))
+
+(define (stob-type obj)
+  (header-type (stob-header obj)))
+
+(define (stob-of-type? obj type)
+  (and (stob? obj)
+       (=& (stob-type obj) type)))
+
+(define (stob-equal? stob1 stob2)    ;CMPC3 or "strcmp"
+  (let ((z1 (stob-header stob1))
+        (z2 (stob-header stob2)))
+    (and (=& z1 z2)
+         (let ((z (header-length-in-cells z1)))
+           (let loop ((i 0))
+             (cond ((>=& i z) #t)
+		   ((=& (stob-ref stob1 i)
+		        (stob-ref stob2 i))
+		    (loop (+& i 1)))
+		   (else #f)))))))
+
+(define (valid-index? index len)
+  (and (>=& index 0) (<& index len)))
+
+; Allocation
+;  *hp* is the heap pointer and *limit* is the limit beyond which no
+;  storage should be allocated.  Both of these are addresses (not
+;  descriptors).
+
+(define *hp* 0)
+(define *limit* 0)
+
+(define (available? cells)
+  (addr< (addr+ *hp* (cells->a-units cells)) *limit*))
+
+(define (make-stob type len)   ;len is in bytes
+  (assert (available? (+ (bytes->cells len) 1)))
+  (store! *hp* (make-header type len))  ;(store-next!)
+  (set! *hp* (addr1+ *hp*))
+  (let ((new (make-stob-descriptor *hp*)))
+    (set! *hp* (addr+ *hp* (bytes->a-units len)))
+    new))
+
+; D-vectors (vectors of descriptors)
+
+(define (d-vector-header? h)
+  (<& (header-type h) least-b-vector-type))
+
+(define (d-vector? obj)
+  (and (stob? obj)
+       (<& (header-type (stob-header obj)) least-b-vector-type)))
+
+(define (make-d-vector type len)
+  (make-stob type (cells->bytes len)))
+
+; The type in these routines is used only for internal error checking.
+
+(define (d-vector-length x)
+  (assert (d-vector? x))
+  (header-length-in-cells (stob-header x)))
+
+(define (d-vector-ref x index)
+  (assert (valid-index? index (d-vector-length x)))
+  (stob-ref x index))
+
+(define (d-vector-set! x index val)
+  (assert (valid-index? index (d-vector-length x)))
+  (stob-set! x index val))
+
+; B-vector = vector of bytes.
+
+(define little-endian? #t)
+
+(define (b-vector-header? h)
+  (and (header? h)
+       (>=& (header-type h) least-b-vector-type)))
+
+(define (b-vector? obj)
+  (and (stob? obj)
+       (>=& (header-type (stob-header obj))
+	    least-b-vector-type)))
+
+(define make-b-vector make-stob)
+
+(define (b-vector-length x)
+  (assert (b-vector? x))
+  (header-length-in-bytes (stob-header x)))
+
+(define (b-vector-ref x i)
+  (assert (valid-index? i (b-vector-length x)))
+  (let* ((word (stob-ref x (quotient& i bytes-per-cell)))
+	 (residue (remainder& i bytes-per-cell))
+	 (right (*& bits-per-byte	;Position of LSB
+		    (if little-endian?
+			residue
+			(-& (-& bytes-per-cell 1) residue)))))
+    (low-bits (high-bits word right)
+	      bits-per-byte)))
+
+(define (b-vector-set! x i val)
+  (assert (valid-index? i (b-vector-length x)))
+  (let* ((word-index (quotient& i bytes-per-cell))
+	 (word (stob-ref x word-index))
+	 (residue (remainder& i bytes-per-cell))
+	 (right (*& bits-per-byte	;Position of LSB
+		    (if little-endian?
+			residue
+			(-& (-& bytes-per-cell 1) residue))))
+	 (left (+& right bits-per-byte)));Position past MSB
+    (stob-set! x
+	       word-index
+	       ;;  ...aaa b ccc...  ->  ...aaa v ccc...
+	       (adjoin-bits (high-bits word left);= ...aaa
+			    (adjoin-bits val
+					 (low-bits word right);= ccc...
+					 right)
+			    left))))

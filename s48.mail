@@ -1,0 +1,1533 @@
+Received: from lcs.mit.edu (CHAOS 15044) by AI.AI.MIT.EDU; 26 Jan 90 12:21:24 EST
+Received: from schizo.samsung.com by mintaka.lcs.mit.edu id aa14648;
+          26 Jan 90 12:14 EST
+Received: by schizo.samsung.com from mitech.UUCP via UUCP (vers 5.61+)
+	for scheme-48@ai.ai.mit.edu (from gjc@mitech.com)
+	id <AA03062@schizo.samsung.com>; Fri, 26 Jan 90 12:14:42 -0500
+Message-Id: <9001261714.AA03062@schizo.samsung.com>
+Reply-To: gjc@mitech.com
+MMDF-Warning:  Parse error in original version of preceding line at lcs.mit.edu
+Received: by mitech.com (DECUS UUCP w/Smail);
+          Fri, 26 Jan 90 10:05:09 EDT
+Date: Fri, 26 Jan 90 10:05:09 EDT
+From: gjc@mitech.com
+MMDF-Warning:  Parse error in original version of preceding line at lcs.mit.edu
+To: scheme-48@ai.ai.mit.edu
+Subject: argument passing conventions
+X-Vms-Mail-To: UUCP%"scheme-48@ai.ai.mit.edu"
+
+Registers vs. stack: it all depends on the code you are compiling
+and how many special cases of built-in's you want to code in the
+run-time library.
+
+Maclisp for example, which used args in registers, and tried to keep things
+in registers, had different versions of some subrs which took arguments
+in different registers but preformed the same hi-level semantic operation.
+
+Of course, sometimes the code produced by the PDP-10 maclisp compiler
+just looked plain STUPID in some cases, with far too much loading and
+unloading of registers and other data shuffling.
+
+But I think it works like this: If YOU KNOW that the compiler uses certain
+techniques then you tend to start writing code that takes advantage of
+those conditions. If the compiler doesnt do anything fancy, and just uses
+the stack for everything, (for example) then you generally don't worry about
+technique at that level, and in your large programs certain optimizations
+may or may not help.
+
+One compromize I became familary with in NIL: For one-argument "mini-subrs"
+the argument was taken in R1. For N argument mini-subrs there was the first
+argument in R1 and the rest on the stack.
+
+BLISS: Now BLISS had a couple features which could be ideal for the kind
+of subsystem-implementation kind of LISP programmer, and which should perhaps
+be included in some Scheme implementation.
+
+* the ability to put a global-variable in a permanently assigned register.
+  Also known in assembly language programming as burning a register.
+* The ability to DECLARE on a function-by-function basis which functions
+  should get which arguments in which registers.
+
+Now, if a compiler had that capability (and indeed, any compiler which
+handles register passing in any way to runtime-support procedures must
+have SOME DATABASE of some kind to be able to declare and used knowledge
+of this sort) then he could let the USER WIN or LOSE by the users own
+skill or overbearing-lack-of-skill at making declarations of this sort.
+
+On the other hand, THIS ALL DEPENDS ON THE HARDWARE.
+Now some hardware looks like it has a stack, but it really has a bank of
+registers, or a display of registers, etc.
+
+-gjc
+
+Received: from lcs.mit.edu (CHAOS 15044) by AI.AI.MIT.EDU; 25 Jan 90 16:14:52 EST
+Received: from uicbert.eecs.uic.edu by mintaka.lcs.mit.edu id aa02947;
+          25 Jan 90 16:10 EST
+Received: by uicbert.eecs.uic.edu
+	(5.60+/IDA-1.2.5) id AA28590; Thu, 25 Jan 90 15:04:15 CST
+Date: Thu, 25 Jan 90 15:04:15 CST
+From: Paul Wilson <wilson@uicbert.eecs.uic.edu>
+Message-Id: <9001252104.AA28590@uicbert.eecs.uic.edu>
+To: scheme-48@ai.ai.mit.edu
+Subject: improvements to runtime system?
+Cc: wilson@uicbert.eecs.uic.edu, wilson@carcoar.stanford.edu
+
+I'm curious about the runtime system improvements Jonathan mentioned.
+What are they?
+
+One thing I've been wondering is how much performance improvement we
+could get by writing a few more things as compiler primitives.  E.g., table
+lookup.  It wouldn't be as fast as migrating them into the VM, but then it
+wouldn't make the VM any bigger.  You could avoid a lot of argument
+argument stacking and binding by just coding things as a flat bytecode sequence.
+
+   -- Paul
+
+
+Received: from lcs.mit.edu (CHAOS 15044) by AI.AI.MIT.EDU; 25 Jan 90 16:02:33 EST
+Received: from uicbert.eecs.uic.edu by mintaka.lcs.mit.edu id aa02258;
+          25 Jan 90 15:52 EST
+Received: by uicbert.eecs.uic.edu
+	(5.60+/IDA-1.2.5) id AA28438; Thu, 25 Jan 90 14:57:14 CST
+Date: Thu, 25 Jan 90 14:57:14 CST
+From: Paul Wilson <wilson@uicbert.eecs.uic.edu>
+Message-Id: <9001252057.AA28438@uicbert.eecs.uic.edu>
+To: scheme-48@ai.ai.mit.edu
+Subject: arg passing on stack, interp vs. compiled, etc.
+Cc: wilson@uicbert.eecs.uic.edu, wilson@carcoar.stanford.edu
+
+When I first starting looking at Scheme48, I saw the arg registers
+and assumed that arguments were passed in the registers, as in T.
+
+Of course, now I realize that they're passed on the stack, and that
+an envt header & superior envt ptr are just pushed on top of them
+to make an envt frame. (Except for compiler primitives.)
+
+
+Question:
+
+  Why are args passed on the stack, in general?  Is this just for
+simplicity?  (It doesn't seem that complicated to me to pass them
+in registers, pushing them on the stack for unknown calls, and popping
+them back into registers afterwards.)
+
+  Are things the way they are for extreme simplicity (perhaps because of an
+emphasis on verifiablility)?  Or has the argument in Kranz' thesis
+turned out to be wrong, so passing args in regs is not a win?  Or is
+it harder than I think to cache the top envt frame in regs, for some reason?
+
+  For my own purposes, efficiency of procedure call conventions is
+quite important.  We're considering doing a compiler that, by and large,
+preserves the interpreter's data formats, stack use, etc.  This would
+enable simpler debugging and more selective compilation and optimization.
+
+(We're considering a scheme like Ungar's dynamic compiler/optimizer for
+Self, only a bit simpler.  Rather than having customized procedure calls,
+almost all of the work would be done with aggressive -- but selective --
+inlining, driven by dynamic trace information.  This would mean we'd use
+the general unknown procedure call mechanism somewhat more often, so
+we'd want it to be as fast as possible; we wouldn't have an intermediate
+level of "custom" procedure calls.)
+
+  This may just boil down to a question of design philosophy.  Is it intended
+that Scheme-48 be a simple, verifiable interpreter, but that real native code
+compiler would play by a different set of rules to get serious performance?
+
+         -- Paul
+
+Paul R. Wilson                         
+Software Systems Laboratory               lab ph.: (312) 996-9216
+U. of Illin. at C. EECS Dept. (M/C 154)   wilson@bert.eecs.uic.edu
+Box 4348   Chicago,IL 60680 
+
+Received: from lcs.mit.edu (CHAOS 15044) by AI.AI.MIT.EDU; 21 Jan 90 05:42:36 EST
+Received: from uicbert.eecs.uic.edu by mintaka.lcs.mit.edu id aa12701;
+          21 Jan 90 5:38 EST
+Received: by uicbert.eecs.uic.edu
+	(5.60+/IDA-1.2.5) id AA19951; Sun, 21 Jan 90 04:41:49 CST
+Date: Sun, 21 Jan 90 04:41:49 CST
+From: Paul Wilson <wilson@uicbert.eecs.uic.edu>
+Message-Id: <9001211041.AA19951@uicbert.eecs.uic.edu>
+To: scheme-48@ai.ai.mit.edu
+Subject: PreScheme compiler
+Cc: wilson@uicbert.eecs.uic.edu, wilson@carcoar.stanford.edu
+
+Could you give more info about the PreScheme compiler?
+
+Could this compiler be hacked to use the VM's own representations,
+and then grafted into the VM itself?  Even if it wouldn't accept
+all of Scheme-48, it could then be used from within Scheme-48
+to compile some procedures.
+
+(Of course, that wouldn't make it interactive, since you'd have to re-link
+the VM and start it up again.  But you could at least write procedures at the
+level of Scheme-48, rather than below the VM level).
+
+
+Received: from lcs.mit.edu (CHAOS 15044) by AI.AI.MIT.EDU; 21 Jan 90 04:28:45 EST
+Received: from uicbert.eecs.uic.edu by mintaka.lcs.mit.edu id aa10490;
+          21 Jan 90 4:23 EST
+Received: by uicbert.eecs.uic.edu
+	(5.60+/IDA-1.2.5) id AA19650; Sun, 21 Jan 90 03:27:39 CST
+Date: Sun, 21 Jan 90 03:27:39 CST
+From: Paul Wilson <wilson@uicbert.eecs.uic.edu>
+Message-Id: <9001210927.AA19650@uicbert.eecs.uic.edu>
+To: scheme-48@ai.ai.mit.edu
+Subject: suggested changes, enhancements
+Cc: wilson@uicbert.eecs.uic.edu, wilson@carcoar.stanford.edu
+
+(A couple of suggestions about the representation of environments, closures,
+and floats, based primarily on gc considerations.)
+
+A. Environments and closures
+
+I'd like to see continuations and environment frames have a distinct header
+type, as closures do.  This adds little or no conceptual overhead, since
+they both have their own accessor functions/macros anyway.  It would also
+make certain things easier:
+
+  1. Changing representations -- since continuations and environments
+     are things you may want to optimize in a future version, you want it to
+     be easy to pick them out and muck with them, either during gc's or
+     if you need to massage a whole heap into a new format.  (You may
+     want static links to be raw pointers, for example, and have the
+     gc know how to interpret them based on their position in an env frame.)
+
+  2. Optimizing a nasty interaction between the stack cache and generational
+     garbage collection.
+        (A generational gc must mark any object into which it stores pointer
+     into a younger generation, so that these pointers can be checked
+     & updated at gc time.  If environments are (or may be) on
+     the heap, that means that storing into _local_variables_ incurs at least
+     a few instructions overhead in checking (Ungar's system) and/or marking
+     (mine).  This would be a big performance hit for a fast system.)
+        If the env frames are easily distinguishable, the gc can keep track
+     of the ones that survive out of the youngest generation, and scan them
+     at each gc rather than marking them every time they're stored into.
+     Big win.
+
+
+B. Floats
+
+If anybody is doing floats, or thinking of doing floats, I strongly recommend
+thinking of representing small floats as immediate values.  (This might
+require taking the "header" tag value and using it for floats instead.)
+
+It turns out that big arrays of floats can be a major headache for a
+generational gc.  The problem comes when you create a float and shove it
+into an object that's in an older generation.  The newly-created float
+is presumably in the youngest generation, because it's brand new.  Shoving
+a pointer to it into the old object creates an intergenerational pointer
+which will cause the gc to scan at least part of that object at the next
+gc.  (And every gc thereafter until the float is promoted into the same
+generation.)
+
+This problem can easily come up in certain common kinds of programs --
+like those that manipulate large arrays of floating point numbers.  In
+Ungar's Generation Scavenging scheme, the *entire* array will be scanned
+at every gc.  (I've heard of Smalltalk programs trying to scan
+4-meg arrays every few seconds.  The scanning is bad enough, but
+the thrashing renders the system unusable.)  My gc is not as vulnerable
+to this, but it is still subject to less dramatic version of the problem.
+
+A good partial solution to this might be to represent floats as immediates,
+so that no intergenerational pointers are created when storing them
+into things.  This would involve shaving off a couple of bits from the
+32-bit representation.  I'm guessing they could be taken out of the
+radix, reducing the range of the float but not its precision.  Such short
+floats could then overflow into doubles, much as short ints overflow
+into bignums.  (This could bring back the problem, but I'd guess it
+would hardly ever happen in practice.)
+
+(Ungar says he has immediate floats in Self now, and I assume
+it is for this reason.)
+
+   -- Paul
+
+Paul R. Wilson                         
+Software Systems Laboratory               lab ph.: (312) 996-9216
+U. of Illin. at C. EECS Dept. (M/C 154)   wilson@bert.eecs.uic.edu
+Box 4348   Chicago,IL 60680 
+
+Received: from lcs.mit.edu (CHAOS 15044) by AI.AI.MIT.EDU; 21 Jan 90 03:44:33 EST
+Received: from uicbert.eecs.uic.edu by mintaka.lcs.mit.edu id aa08681;
+          21 Jan 90 3:39 EST
+Received: by uicbert.eecs.uic.edu
+	(5.60+/IDA-1.2.5) id AA19514; Sun, 21 Jan 90 02:43:22 CST
+Date: Sun, 21 Jan 90 02:43:22 CST
+From: Paul Wilson <wilson@uicbert.eecs.uic.edu>
+Message-Id: <9001210843.AA19514@uicbert.eecs.uic.edu>
+To: scheme-48@ai.ai.mit.edu
+Subject: my project
+Cc: wilson@carcoar.stanford.edu
+
+My research, which Jonathan alluded to, is about reconstructive memory
+for program executions.  I'm building a nice reversible debugger
+for Scheme48 -- or at least the hard parts.
+
+  (I don't immediately plan to make it really fun to use as a debugger --
+I mostly want to show it can be done very efficiently by coordinating
+checkpointing with my generational gc.
+  That way you can leave your debugger on all the time, or most of the time,
+and quickly reconstruct any error that leads to an observable problem.
+Quickly means 1 or 2 orders of magnitude faster than it would take to re-run
+the program, for non-trivial programs.  This should all take just a few
+meg of RAM and a few meg of disk, and only slow compiled code down by 7-15%
+on average.)
+
+  Unlike the gc & stack cache, this is nowhere near ready for other people
+to play with yet.  But if you're interested, see my paper in the 1989
+SIGPLAN proceedings and/or drop me a line.
+
+    -- Paul
+
+
+Paul R. Wilson                         
+Software Systems Laboratory               lab ph.: (312) 996-9216
+U. of Illin. at C. EECS Dept. (M/C 154)   wilson@bert.eecs.uic.edu
+Box 4348   Chicago,IL 60680 
+
+Received: from lcs.mit.edu (CHAOS 15044) by AI.AI.MIT.EDU; 21 Jan 90 03:34:21 EST
+Received: from uicbert.eecs.uic.edu by mintaka.lcs.mit.edu id aa08387;
+          21 Jan 90 3:28 EST
+Received: by uicbert.eecs.uic.edu
+	(5.60+/IDA-1.2.5) id AA19095; Sun, 21 Jan 90 02:32:06 CST
+Date: Sun, 21 Jan 90 02:32:06 CST
+From: Paul Wilson <wilson@uicbert.eecs.uic.edu>
+Message-Id: <9001210832.AA19095@uicbert.eecs.uic.edu>
+To: scheme-48@ai.ai.mit.edu
+Subject: I've got stack cache, generational gc for Bob's (C-coded) VM
+Cc: wilson@uicbert.eecs.uic.edu, wilson@carcoar.stanford.edu
+
+I've got a generational garbage collector (see my paper in OOPLSA-89
+if you're interested) installed in Bob Brown's version of the Scheme-48
+VM.  It's written in C, like the rest of the VM.
+
+This may be of interest to anybody interested in the C VM, or in using
+the GC for something else.  Right now it's not pretty, with a bunch
+of hacks for my research that should be stripped out or simplified.
+
+I have also translated/reimplemented the stack cache.  I tried to
+keep it like the one for the PreScheme-coded VM for the most
+part, so that one doc could cover both.  I changed a couple of
+things, though.  (It implements the incremental stack/heap strategy recommended
+in the Clinger-Hartmanis-Ost paper on implementing continuations.)
+
+   --  Paul
+
+
+Paul R. Wilson                         
+Software Systems Laboratory               lab ph.: (312) 996-9216
+U. of Illin. at C. EECS Dept. (M/C 154)   wilson@bert.eecs.uic.edu
+Box 4348   Chicago,IL 60680 
+
+Received: from lcs.mit.edu (CHAOS 15044) by AI.AI.MIT.EDU; 18 Jan 90 04:37:40 EST
+Received: from uicbert.eecs.uic.edu by mintaka.lcs.mit.edu id aa03099;
+          18 Jan 90 4:33 EST
+Received: by uicbert.eecs.uic.edu
+	(5.60+/IDA-1.2.5) id AA15813; Thu, 18 Jan 90 03:36:28 CST
+Date: Thu, 18 Jan 90 03:36:28 CST
+From: Paul Wilson <wilson@uicbert.eecs.uic.edu>
+Message-Id: <9001180936.AA15813@uicbert.eecs.uic.edu>
+To: scheme-48@ai.ai.mit.edu
+Subject: changes in VM?
+Cc: wilson@uicbert.eecs.uic.edu, wilson@carcoar.stanford.edu
+
+Could anybody give me any tips on what has changed between the old
+(non-stack-cache) VM and the new one?
+
+So far I notice that 1) istate objects are different, with the major
+regs being shoved directly into the istate object rather than
+pushed into a continuation object first, and 2) that exception
+handling has changed.  (Rather than pushing the istate on the stack
+as an arg to the exception handler, an "exception continuation" and
+a variable number of args are pushed.)
+
+Any details on the above changes, and more importantly, pointers to any
+changes I _haven't_noticed_yet_ would me much appreciated.  Things
+like changes in image file formats, object formats, etc. would be
+of great interest.  I'm afraid of embarking on this without knowing
+what kinds of subtle changes may have been made.
+
+(The point of this is that I've added a generational garbage collector
+and -- finally -- the stack cache to Bob Brown's VM written in C, and I want 
+to update it to read the new images.  Anybody else interested in the C 
+version anymore?)
+
+        -- Paul
+
+
+Paul R. Wilson                         
+Software Systems Laboratory               lab ph.: (312) 996-9216
+U. of Illin. at C. EECS Dept. (M/C 154)   wilson@bert.eecs.uic.edu
+Box 4348   Chicago,IL 60680 
+
+Received: from REAGAN.AI.MIT.EDU (CHAOS 13065) by AI.AI.MIT.EDU 23 Aug 89 15:33:31 EDT
+Received: from ATHENA.CS.YALE.EDU (INTERNET|128.36.0.27) by REAGAN.AI.MIT.EDU via INTERNET with SMTP id 253188; 23 Aug 89 15:32:58 EDT
+Received: by ATHENA.CS.YALE.EDU; Wed, 23 Aug 89 15:28:06 EDT
+From: Richard Kelsey <kelsey-richard@YALE.ARPA>
+Full-Name: Richard Kelsey
+Message-Id: <8908231928.AA10790@ATHENA.CS.YALE.EDU>
+Received: by yale-ring (node-a03c/A03C) 
+          via WIMP-MAIL (Version 1.3/1.5) ; Wed Aug 23 15:08:11
+Date: Wed, 23 Aug 89 15:08:07 EDT
+Subject: Re: Scheme-48 stack implementation questions
+To: Paul Wilson <wilson@carcoar.stanford.edu>
+Cc: scheme-48@ai.ai.mit.edu
+In-Reply-To: Paul Wilson <wilson@carcoar.stanford.edu>, Wed, 23 Aug 89 10:55:39 -0700
+
+    Date: Wed, 23 Aug 89 10:55:39 -0700
+    From: Paul Wilson <wilson@carcoar.stanford.edu>
+    
+       1.  Are environments always allocated in the stack, and then
+           copied into the heap as necessary? 
+           (It looks as though arguments on the stack just get a header
+           pushed on top of them to turn them into an envt frame in place.)
+
+Yes, environments are always created on the stack and then moved to the heap
+as necessary.  Environments are created by pushing a header onto the arguments
+on the stack.
+    
+       2.  When exactly is it necessary to move environments out of the stack?
+           Besides call/cc, I'm guessing it's done whenever an environment
+           can possibly escape, so the current compiler must be doing
+           some (very simple) closure analysis, or being very conservative.
+
+Whenever a closure is made the environment is moved to the heap if it isn't
+already there.  The current compiler does no closure analysis.
+    
+       3.  It looks as though the environment frames are copied out for
+           a call/cc but only the activation records are copied in when
+           a continuation is caught.  And to resume a saved continuation,
+           only one frame is copied in -- underflow handling incrementally
+           copies more in, as needed.
+
+Correct.  For SET! to work properly there cannot be more than one copy of an
+environment.  Once one has been moved to the heap it is never moved back to
+the stack.
+    
+       4.  Is there any documentation whatsoever specifying the virtual
+           machine, or describing the code generation strategy?  (e.g.,
+           is op/closure supposed to only be emitted when you need a
+           full funarg?, what do you do for downward-only escapes?, etc.)
+
+I don't think there is any documentation other than what is in the code.
+Currently, OP/CLOSURE is emitted for every LAMBDA (that takes arguments) in
+the source.
+    
+       5.  How forward-looking is this design?  E.g., if environment
+           frames are always allocated in the stack, is there a significant
+           cost for the frames that should have been allocated in the heap
+           in the first place?  (That is, frames that static analysis
+           would show are going to be copied into the heap anyway.)  I'm
+           wondering about repeated unnecessary executions of the environment-
+           saving code as well as the copying per se.  And I'm assuming an
+           eventual native-code compiler, so that such costs would not
+           be masked by bytecode interpretation speed.
+
+The environment saving code does exactly what needs to be done to create a
+closure in the heap.  The extra runtime actions are pushing the environment
+header onto the stack and checking the location of the environment whenever
+a closure is created.  This isn't much compared to the gains of creating heap
+environments only when they are actually needed.
+
+It would be nice if the compiler used a seperate opcode for closure creation
+when it determined that the environment did not need to be saved in the heap.
+Marking those that it knows must be saved in the heap would only save a few
+instructions.
+
+A native code compiler is free to create environments wherever it likes.
+
+                                     -Richard Kelsey
+                                      kelsey@cs.yale.edu
+-------
+
+
+Received: from REAGAN.AI.MIT.EDU (CHAOS 13065) by AI.AI.MIT.EDU 23 Aug 89 14:05:08 EDT
+Received: from carcoar.Stanford.EDU (INTERNET|36.8.0.55) by REAGAN.AI.MIT.EDU via INTERNET with SMTP id 253122; 23 Aug 89 14:04:40 EDT
+Received: by carcoar.Stanford.EDU (5.61 built Aug 15 1989 on wolvesden.stanford.edu/inc-1.01)
+	id AA02985; Wed, 23 Aug 89 10:55:39 -0700
+Date: Wed, 23 Aug 89 10:55:39 -0700
+From: Paul Wilson <wilson@carcoar.Stanford.EDU>
+Message-Id: <8908231755.AA02985@carcoar.Stanford.EDU>
+To: scheme-48@ai.ai.mit.edu
+Subject: Scheme-48 stack implementation questions
+Cc: wilson@carcoar.Stanford.EDU, wilson@bert.eecs.uic.edu
+
+
+I want to implement the array stack cache for the C version of the
+virtual machine, but I'm a bit unclear on just how the Scheme-coded
+version works.
+
+Could somebody clue me in as to the details of stack management?
+
+My impressions at present (correct me if I' wrong):
+
+     The stack strategy is basically to keep the top part of the
+     stack in a real array, and the rest in heap.
+
+     Environment frames are often (always?) allocated in the stack.
+     At some times (as when doing call/cc), they are moved to the
+     heap once and for all so that they remain unique -- they are never 
+     copied back into the stack when an explicit continuation is restored
+     from the heap.
+
+questions:
+
+   1.  Are environments always allocated in the stack, and then
+       copied into the heap as necessary? 
+       (It looks as though arguments on the stack just get a header
+       pushed on top of them to turn them into an envt frame in place.)
+
+   2.  When exactly is it necessary to move environments out of the stack?
+       Besides call/cc, I'm guessing it's done whenever an environment
+       can possibly escape, so the current compiler must be doing
+       some (very simple) closure analysis, or being very conservative.
+
+   3.  It looks as though the environment frames are copied out for
+       a call/cc but only the activation records are copied in when
+       a continuation is caught.  And to resume a saved continuation,
+       only one frame is copied in -- underflow handling incrementally
+       copies more in, as needed.
+
+   4.  Is there any documentation whatsoever specifying the virtual
+       machine, or describing the code generation strategy?  (e.g.,
+       is op/closure supposed to only be emitted when you need a
+       full funarg?, what do you do for downward-only escapes?, etc.)
+
+   5.  How forward-looking is this design?  E.g., if environment
+       frames are always allocated in the stack, is there a significant
+       cost for the frames that should have been allocated in the heap
+       in the first place?  (That is, frames that static analysis
+       would show are going to be copied into the heap anyway.)  I'm
+       wondering about repeated unnecessary executions of the environment-
+       saving code as well as the copying per se.  And I'm assuming an
+       eventual native-code compiler, so that such costs would not
+       be masked by bytecode interpretation speed.
+
+So far, it looks like a nice VM that would do well with real compilation
+(args passed in registers, etc.), but I'm wondering where the tradeoffs
+are between simplicity and the ability to improve performance.
+
+Any tips would be appreciated.
+
+Thanks prematurely,
+
+    Paul
+
+Paul R. Wilson                         
+Software Systems Laboratory               lab ph.: (312) 996-9216
+U. of Illin. at C. EECS Dept. (M/C 154)   wilson@bert.eecs.uic.edu
+Box 4348   Chicago,IL 60680 
+
+Received: from void.ai.mit.edu (TCP 2206400236) by AI.AI.MIT.EDU 16 Mar 89 20:38:23 EST
+Received: by void.ai.mit.edu (5.59/1.5)
+	id AA12819; Thu, 16 Mar 89 20:32:52 EST
+Date: Thu, 16 Mar 89 20:32:52 EST
+From: jar@void.ai.mit.edu (Jonathan Rees)
+Message-Id: <8903170132.AA12819@void.ai.mit.edu>
+To: wilson@carcoar.Stanford.EDU
+Cc: scheme-48@ai.ai.mit.edu
+In-Reply-To: Paul Wilson's message of Tue, 7 Mar 89 09:00:44 PST <8903071700.AA16893@carcoar.Stanford.EDU>
+Subject: need documentation or advice on VM escape, misc. etc.
+Reply-To: jar@zurich.ai.mit.edu
+
+   Date: Tue, 7 Mar 89 09:00:44 PST
+   From: Paul Wilson <wilson@carcoar.Stanford.EDU>
+
+      It looks easy enough to modify the VM by adding a new opcode.  I'd
+   appreciate any advice about modifying the compiler to emit the new
+   opcode, etc.
+
+If you want to do this without rebuilding the runtime system image
+from scratch, it can be done.  I think the following recipe should do
+the trick, although I haven't tested this recently:
+  (a) :enable, to enter the system environment
+  (b) extend the "opcode" enumerated type:
+      (set! opcode (list->vector (append (vector->list opcode) '(my-new-opcode))))
+  (c) tell the compiler about it [see cprim.scm]:
+      (dp 'my-new-opcode <number-of-args> #f (trivial 'my-new-opcode))
+  (d) [optional] create the procedure object (in case you want to use it in
+      non-function position, or from the user environment):
+      (define (my-new-opcode arg1 arg2 ...)
+        (call-primitively my-new-opcode arg1 arg2 ...))
+  (e) [optional] export it or something built on it to the user environment:
+      (environment-define! user-initial-environment 'my-new-opcode my-new-opcode)
+  (f) :disable, to go back to the user environment
+  (g) :dump filename
+
+Note that procedure calls only become uses of the primitive bytecodes
+for code compiled in the system environment; this is to make sure that
+set! has the correct semantics.  This means that code in the user
+environmetn runs a lot slower; you get better performance if you
+:enable first, but then you run the risk of clobbering internal system
+functions.  (The right thing would be to have a command that enables
+inlining without moving into the system environment.)
+
+      Is there *any* documentation at all available yet, however sketchy and/or
+   unfinished?   I only understand the basics of compiling Scheme, and haven't
+   really thoroughly studied the compiler yet.  It doesn't look complicated,
+   but a little bit of explanation could go a long way.
+
+No.  I'm happy to answer explicit questions though.  Also, some of the
+course notes from an MIT course on programming languages describe a
+similar virtual machine and compiler; I could send you those, if you
+like.
+
+      Is anything happening with Scheme-48?   Is anybody interested in
+   standardizing a VM-escape opcode?  It seems to me there should be a
+   standard way of doing implementation-specific things that are ignored
+   by VMs that don't implement them.
+
+I won't do any work on it until summer.  Richard Kelsey is working on
+compiling the Scheme version of the VM directly into 68000 code and C.
+Bob Brown tells me that he may do a little work on some aspect of
+scheme-48 this spring.  An ecape opcode is a plausible idea, but I'd
+have to think about it.
+
+      By the way, what are the issues in making things officially free?  I
+   think I want to make a version of my gc public domain in some public
+   way before summer.  This would insure that some prospective employers
+   would be able to tell what I developed before becoming employed, and
+   what I developed after, which they might make proprietary.  I'd like
+   to put my gc out there in some dated, verifiable form to avoid any
+   confusion.
+
+I think that making something public domain is trivial, you just
+publish it without putting a copyright notice on it.  ("Publication"
+can be interpreted pretty broadly; I think that publicly announcing a
+place on the Internet for ftp is enough.)  If you want legal copyright
+protection after five years after publication, you have to file with
+the library of congress (??).
+
+      (Also, what's the ownership status of the Scheme-48 system and
+   C VM.  I'm assuming they're PD as well.  Is that right?)
+
+No, s48 isn't public domain.  I would like to make it copyright the
+authors (myself and Richard Kelsey and, for the C VM, Bob Brown), and
+attach the Free Software Foundation's usual copying notice and general
+public license, i.e. make it just like GNU emacs.  This allows
+redistribution but imposes restrictions on anyone who would
+redistribute it, e.g. you have to supply sources, propagate the
+permission to copy, etc.
+
+Received: from bu-it.BU.EDU (TCP 20061201050) by AI.AI.MIT.EDU 20 Oct 88 20:53:28 EDT
+Received: from bucsf (BUCSF.BU.EDU) by bu-it.BU.EDU (4.0/4.7)
+	id AA22784; Thu, 20 Oct 88 20:51:49 EDT
+Return-Path: <gjc@bucsf.bu.edu>
+Received: by bucsf (4.12/4.7)
+	id AA10460; Thu, 20 Oct 88 20:51:16 edt
+Date: Thu, 20 Oct 88 20:51:16 edt
+From: gjc%bucsf.BU.EDU@bu-it.bu.edu (George J. Carrette)
+Message-Id: <8810210051.AA10460@bucsf>
+To: jar@zurich.ai.mit.edu
+Cc: wilson@uicbert.eecs.uic.edu, scheme-48@ai.ai.mit.edu
+Subject: Scheme-48 data formats, gc scanning
+
+OK. Family of lisp architectures sounds good to me. I guess I should
+start playing with it to see if it works out for me. Where do I ftp
+a distribution from?
+
+When I use a pointer rep of [30-bit-address][2-bit-primitive-code]
+and give the CONS cell one of the 4 primitive types, it takes,
+lets say 1 unit of time to process a failed MEMQ on a list 10000 long.
+
+When I use a pointer rep of [8-bit-segment-number][22-bit-offset][2-bit-prim]
+and have to code a CAR as:
+ *(segment_table[PTR>>24] + PTR & 0x00FFFFFFFC) it only takes 1.55 units
+of time. 
+
+This is coding in C with the VAX/VMS C compiler. You can see that with
+the first scheme I will be doing 20000 memory reads (of data) and with
+the second scheme 1+10000+20000, which is 50% more. This is not really
+that big a deal, so there must be some other reasons why the original
+Apollo lisp product was "disgustingly slow." Perhaps they used a 64 bit
+pointer plus some other hair? Of course in worst case a single CAR
+might be 1 memory reference vs 2 (or 3 if you need to load the address
+of the segment_table into a register first). Three times as slow could
+be disgusting, and worse if you dont have an instruction cache and do
+too much open compilation.
+
+-gjc
+
+
+
+Received: from void.ai.mit.edu (TCP 2206400236) by AI.AI.MIT.EDU 20 Oct 88 19:50:47 EDT
+Received: by void.ai.mit.edu (5.59/1.5)
+	id AA02147; Thu, 20 Oct 88 19:51:48 EDT
+Date: Thu, 20 Oct 88 19:51:48 EDT
+From: jar@void.ai.mit.edu (Jonathan Rees)
+Message-Id: <8810202351.AA02147@void.ai.mit.edu>
+To: wilson@uicbert.eecs.uic.edu
+Cc: scheme-48@ai.ai.mit.edu
+In-Reply-To: Paul Wilson's message of Thu, 20 Oct 88 16:06:43 CST <8810202206.AA10157@uicbert.eecs.uic.edu>
+Subject: data formats;  puzzling slowness on VAX
+Reply-To: jar@zurich.ai.mit.edu
+
+   Date: Thu, 20 Oct 88 16:06:43 CST
+   From: wilson@uicbert.eecs.uic.edu (Paul Wilson)
+
+     1)  Why use a whole primary tag to mark headers?  It seems like a
+	 sad waste, when you could use it for cons cells, speeding up
+	 a lot of code and saving a lot of space.  It looks like the
+	 garbage collector takes advantage of this (in that any non-
+	 header descriptor in a header slot must really be a forwarding
+	 pointer).  Is that the only reason?  Is there any reason a header
+	 value couldn't just be another kind of immediate value?
+
+There is no particular reason to use up the fourth tag like this.  An
+earlier version of the VM had headers implemented as immediates, and
+that works just fine.  But the "data" module is simpler if headers are
+distinct, and using the fourth tag for pairs would make other things
+(like the GC) more complicated as well.  So the only reason things are
+this way is simlicity.
+
+It's not totally obvious that you want to use the fourth tag for
+conses; it could be used for, say, closures, or futures, or who knows
+what.  And as long as one tag is used for pairs, maybe we should go to
+using the low three bits for tag, so we can make type predication
+faster for an additional four types, and save some more space.
+
+     2)  Do you know of anything wrong with the C-coded VM on a VAX?  I'm
+	 getting amazingly abysmal performance.  (I typed in about a half
+	 page of non-recursive, non-iterative code -- mostly nested calls
+	 to list -- and it took a while to return my nested list.  It
+	 garbage collected twice, doing what had to be less than fifty
+	 procedure calls and consing up no more than 100 elements.)
+
+Did you compile using the gnu C compiler?  (See "gmakefile".)  If
+not, then you're not getting inline integration of many functions, and
+the system will run a lot slower.
+
+I think that Bob Brown now has a new version of the C VM that exploits
+a source-to-source C function inlining program.  This way you can get
+speed even if you're not using gcc.  I'll see if I can talk him into
+making this available.
+
+A true stack will cut the consing down to zero, and should speed
+things up as well.
+
+Another source of slowness is the compiler; for a typical form typed
+at the rep loop that doesn't do much computing, the compiler has to be
+invoked, and it's doing a lot of byte codes.  For example, primitives
+(of which there are 60 or so) and keywords are looked up in tables,
+which are implemented as a-lists, and ASSQ is written in Scheme, so
+each iteration of ASSQ's loop involves several byte codes and
+procedure calls...  Before doing microhacks such as making an ASSQ
+byte code (or general hash table byte codes) I'd like to have some
+performance monitoring tools, so that improvements (i.e.
+complications) can be made based on empirical data rather than
+intuition.
+
+Jonathan
+
+Received: from void.ai.mit.edu (TCP 2206400236) by AI.AI.MIT.EDU 20 Oct 88 16:26:02 EDT
+Received: by void.ai.mit.edu (5.59/1.5)
+	id AA02033; Thu, 20 Oct 88 16:27:51 EDT
+Date: Thu, 20 Oct 88 16:27:51 EDT
+From: jar@void.ai.mit.edu (Jonathan Rees)
+Message-Id: <8810202027.AA02033@void.ai.mit.edu>
+To: gjc%bucsf.BU.EDU@bu-it.bu.edu
+Cc: wilson@uicbert.eecs.uic.edu, scheme-48@ai.ai.mit.edu
+In-Reply-To: George J. Carrette's message of Wed, 19 Oct 88 18:42:52 edt <8810192242.AA14566@bucsf>
+Subject: Scheme-48 data formats, gc scanning
+Reply-To: jar@zurich.ai.mit.edu
+
+   Date: Wed, 19 Oct 88 18:42:52 edt
+   From: gjc%bucsf.BU.EDU@bu-it.bu.edu (George J. Carrette)
+
+   In my experience with various lispmachine storage management
+   techniques I think it is best to address the problem of
+   backward-scanning by solving the problem of managing pointers into
+   arbitrary bitvectors/strings directly by the use of what we at LMI
+   (Greenblatt et. al.) called a structure-handle table.
+
+I wasn't trying to say what was best, I was saying what was easiest.
+The extra bit is a one-hour hack, yours would take longer and more
+code.
+
+   Anyway, suffice it to say that I think any "MODEL/PORTABLE" lisp
+   system should use a segmented or at least position-independant pointer
+   addressing scheme, and this may be good to adopt in scheme-48.
+
+Certainly this can be done as an option, but I don't think it will
+always be the right thing.  (Apollo's original lisp product did this,
+for some of the reasons you suggest, and it was disgustingly slow.)
+The main point of scheme-48 is that it's supposed to modular: if you
+want to replace the memory system in this way, it should be
+straightforward to do so.  (I'm not saying that it is, just that it
+should be.)  In other words, scheme-48 should be a *family* of lisp
+architectures -- you make the particular system you want by mixing and
+matching numerous alternative components.
+
+Received: from void.ai.mit.edu (TCP 2206400236) by AI.AI.MIT.EDU 20 Oct 88 16:18:16 EDT
+Received: by void.ai.mit.edu (5.59/1.5)
+	id AA02030; Thu, 20 Oct 88 16:19:48 EDT
+Date: Thu, 20 Oct 88 16:19:48 EDT
+From: jar@void.ai.mit.edu (Jonathan Rees)
+Message-Id: <8810202019.AA02030@void.ai.mit.edu>
+To: wilson@uicbert.eecs.uic.edu
+Cc: scheme-48@ai.ai.mit.edu
+In-Reply-To: Paul Wilson's message of Wed, 19 Oct 88 16:22:57 CST <8810192222.AA28644@uicbert.eecs.uic.edu>
+Subject: Scheme-48 questions
+Reply-To: jar@zurich.ai.mit.edu
+
+   Date: Wed, 19 Oct 88 16:22:57 CST
+   From: wilson@uicbert.eecs.uic.edu (Paul Wilson)
+
+   Four quick questions:
+
+     1)  Is there a workaround for the C VM bug that causes it to loop
+   infinitely if you hit ctl-D?
+
+Yes.  Change the read-char bytecode in the VM so that if end of file
+is found, it calls clearerr(file) before returning the eof-object.
+
+     2) Is the new "real stack" an array?  (Is this a good idea?)  Wouldn't it
+   be better to store stacks on the heap, maybe with a cache?  I would think
+   that a linked representation would be easier to extend for multiprocessing
+   and efficient continuation switching, with the stack being copied
+   lazily and incrementally.  I don't know the pros and cons of these things,
+   though.
+
+What you're describing is the way the system works now -- stack frames
+are in the heap and reclaimed by the gc.  The "real stack" is a linear
+section of storage, but frames are copied to the heap when a CWCC is
+done, and copied back from the heap to the stack area, one at a time,
+on any return to a frame that's in the heap.  This is the "incremental
+stack/heap strategy" that Clinger recommends in his paper in the 1988
+Lisp & FP Conference.  If you have zillions of tasks then this might
+be the wrong thing, although that's not obviously the case; I'd try
+both and do benchmarks.  (You will be able to configure the system
+either way.)  Of course if you have a multiprocessor then you'll want
+one stack region per processor, or maybe even one stack per task.
+Hard problem.
+
+     3) Would Scheme-48 blow up on an EBCDIC (non-ASCII) machine?  Some people
+   in our math department may want to use it on an IBM 370.
+
+As it stands, it will blow up.  The easiest way to fix this would be
+to change the implementation of the read-char, write-char,
+write-string, open-input-file, open-output-file, and write-image byte
+codes so that they do ascii->ebcdic conversion.  Better would be to
+convert the heap image when it's read (and written?), which should be
+a very easy program to write; you can identify all characters and
+strings in the heap easily enough and clobber them to be ebcdic.  Then
+just change the char<->ascii byte codes so that they do ascii/ebcdic
+conversion.
+
+     4) Would it be better (significantly faster) if pointers were offsets or
+   actual C longint pointers, instead of left-shifted integer array indexes?
+   They could always be translated by the image i/o routines.  This is probably
+   not a big problem now, but it might start to matter with a native-code
+   compiler.  (Does a good C compiler optimize away many of the unnecessary
+   shifts, seeing that it will shift left again to compute an array index?)
+
+Pointers ARE direct C pointers in the C version of the VM.  Maybe you
+have the wrong version of it.  When did you get the system?  I think that
+the latest is on zurich.ai.mit.edu:/pub/jar/s48.tar.Z.
+
+Received: from uicbert.eecs.uic.edu (TCP 20076123031) by AI.AI.MIT.EDU 19 Oct 88 20:16:39 EDT
+Received: by uicbert.eecs.uic.edu (UIUC-5.52/9.7)
+	id AA29790; Wed, 19 Oct 88 18:17:08 CST
+Date: Wed, 19 Oct 88 18:17:08 CST
+From: wilson@uicbert.eecs.uic.edu (Paul Wilson)
+Message-Id: <8810200017.AA29790@uicbert.eecs.uic.edu>
+To: gjc%bucsf.BU.EDU@bu-it.bu.edu
+Subject: pointer addressing modes, noncontiguous scanning
+Cc: jar@ai.ai.mit.edu, scheme-48@ai.ai.mit.edu, wilson@uicbert.eecs.uic.edu
+
+I guess I have to agree that raw C pointers would cause trouble,
+but I'm not so sure about offsets.  They should relocate fine,
+shouldn't they?  That would at least avoid some shifting on
+byte-addressed machines.  It seems likely that a compiler could
+then use a single instruction with the right addressing mode.
+(Presumably, ifdef macros would still put shifts in the address
+extraction for word-addressed machines.)
+
+The comments about scanning reminded me of a simpler system,
+used in Appel, Ellis, and Li's "real-time, concurrent" collector
+for stock multiprocessors.  They just have a single bit for each
+page, saying whether it's safe to begin a scan at the start of
+the page.  If anything crosses between pages that could confuse
+a scan, the bit is set.  To find a place to begin scanning, you
+keep jumping back a page until you find a safe one, and scan
+any intervening pages.  I'm wondering how often you have to
+scan more than a couple of pages.
+
+(By the way, their paper is in the SIGPLAN '88 Conf. on Programming
+Language Design and Implementation proceedings.  Their design seems
+very good, though I'm dubious that it's real-time in any meaningful
+sense.)
+
+Paul
+
+Paul R. Wilson                         
+Human-Computer Interaction Laboratory
+U. of Illin. at C. EECS Dept. (M/C 154)   wilson%uicbert@uxc.cso.uiuc.edu
+Box 4348   Chicago,IL 60680 
+
+Received: from bu-it.BU.EDU (TCP 20061201050) by AI.AI.MIT.EDU 19 Oct 88 18:44:53 EDT
+Received: from bucsf (BUCSF.BU.EDU) by bu-it.BU.EDU (4.0/4.7)
+	id AA02500; Wed, 19 Oct 88 18:43:25 EDT
+Return-Path: <gjc@bucsf.bu.edu>
+Received: by bucsf (4.12/4.7)
+	id AA14566; Wed, 19 Oct 88 18:42:52 edt
+Date: Wed, 19 Oct 88 18:42:52 edt
+From: gjc%bucsf.BU.EDU@bu-it.bu.edu (George J. Carrette)
+Message-Id: <8810192242.AA14566@bucsf>
+To: jar@zurich.ai.mit.edu
+Cc: wilson@uicbert.eecs.uic.edu, scheme-48@ai.ai.mit.edu
+Subject: Scheme-48 data formats, gc scanning
+
+In my experience with various lispmachine storage management
+techniques I think it is best to address the problem of
+backward-scanning by solving the problem of managing pointers into
+arbitrary bitvectors/strings directly by the use of what we at LMI
+(Greenblatt et. al.) called a structure-handle table.
+
+The table is simple. For every allocated page in memory have a entry which
+gives the first location in that page which is a lisp pointer. This
+table doesnt take up much space either. For example, on a VAX under VMS,
+where the basic unit of lisp storage alignment might be 4 bytes,
+so there are 128 pointers on a page, 8 bits per entry will be fine.
+You have one bit to tell you if the entire page is binary data.
+
+Of course the "page" might not have anything to do with the operating
+system page, and the storage alignment needs might be further expanded.
+
+With this information the famous CADR function
+SI:%FIND-STRUCTURE-HEADER could be made to go backwards over storage
+by using a zig-zag motion, going forwards in those pages which
+contained some binary data.
+
+It is much better to use this table, which is cheap to maintain by
+block-allocating in CONS, than it is to WARP your entire address space
+by throwing away a bit. For example, if you make a 36 or 40 bit machine
+you will have problems on industry standard buss structures, and if
+you throw away part of a 32 bit word you have trouble on conventional
+machines with interfacing with other languages or operating system
+provided data structures. There is no need for that lossage.
+
+Q: Why was this needed? (Given that there are no locatives to binary data?)
+A: Because the temporal garbage collector looked at a hardware maintained
+   table which told it which pages had been written on since the last
+   garbage collection (of a given volatility) and therefore it needed
+   to know where to start scanning a page, since scanning forward was
+   easy, due to the use of structure-header technique.
+
+
+Can I throw another wrench in this VM? You know about my little siod.c
+scheme interpreter. Well, I have another one in the works which uses
+"position independant list/object structure." This is good to have when
+the operating system either under which it runs:
+
+ (1) allows you to map files to your address space, but since it uses
+     this technique itself quite extensively for dynamic linking or
+     dynamic program image activation, it cannot always give you
+     the address space you think you want.
+ (2) has a relocating storage/resource management system.
+
+An example of (1) is the VAX under VMS, and (2) is the Apple Macintosh.
+
+Actually, I'm going a bit further, to a SEGMENT/OFFSET address scheme
+in a pointer, for maximum flexibility. On multics of course, well...
+
+Anyway, suffice it to say that I think any "MODEL/PORTABLE" lisp
+system should use a segmented or at least position-independant pointer
+addressing scheme, and this may be good to adopt in scheme-48.
+
+-gjc
+
+Received: from void.ai.mit.edu (TCP 2206400236) by AI.AI.MIT.EDU 19 Oct 88 13:49:22 EDT
+Received: by void.ai.mit.edu (5.59/1.5)
+	id AA01347; Wed, 19 Oct 88 13:51:36 EDT
+Date: Wed, 19 Oct 88 13:51:36 EDT
+From: jar@void.ai.mit.edu (Jonathan Rees)
+Message-Id: <8810191751.AA01347@void.ai.mit.edu>
+To: wilson@uicbert.eecs.uic.edu
+Cc: scheme-48@ai.ai.mit.edu
+In-Reply-To: Paul Wilson's message of Tue, 18 Oct 88 17:05:24 CST <8810182305.AA09617@uicbert.eecs.uic.edu>
+Subject: Scheme-48 data formats, gc scanning
+Reply-To: jar@zurich.ai.mit.edu
+
+   Date: Tue, 18 Oct 88 17:05:24 CST
+   From: wilson@uicbert.eecs.uic.edu (Paul Wilson)
+
+     Could you tell me if Scheme-48 data formats allow scanning
+   to begin at an arbitrary location (like in the middle of an
+   object)? 
+
+They don't at present, but it would be simple to change.  All objects
+have headers, but strings and code vectors contain arbitrary bit
+patterns that could possibly masquerade as headers.  However, since in
+principle only 7-bit bytes are needed, an object's header could be
+marked by, say, setting the high bit (of a 32-bit word).  Then you
+could start anywhere and scan backwards for a word whose high bit and
+low two bits indicate that it's a header.
+
+Changes to the memory system like this are very easy to make.
+
+     Also, can you tell me the progress and outlook for Scheme-48,
+   especially in terms of robustness of the implementation?  I'm
+   weighing the pros and cons of Scheme-48 against Oaklisp, which
+   is a little more complex than I need to deal with, but pretty
+   robust already.
+
+I think scheme-48 is quite solid, with the exception of a few known
+bugs.  Like MacScheme, it should be impossible to crash it.  It has
+been debugged with exhaustive internal consistency checks enabled.
+But no one has really exercised it heavily.
+
+     And if there's any documentation around, however incomplete,
+   please send me a copy.  I'm especially interested in instructions
+   for building initial images after modifying the vm.
+
+Sorry about this.  I really do intend to write about it, but I don't
+think I'll have time to either write or hack until after January 20th
+(SM thesis deadline and oral exam).  If you have particular questions
+I'd be happy to answer them, i.e. I will produce the documentation in
+small quantities on demand.
+
+Currently the only way to make a new heap with incompatible data
+formats is to simulate a suitable VM in Scheme (that means T or Common
+Lisp, right now) and dump out a new heap from there.  But it would
+also be possible to do as MacScheme has done a couple of times, which
+is to use special-purpose conversion programs to convert from one
+heap image format to another.
+
+By the way: there is now a new version of the VM now with a true
+stack, but it hasn't been translated into C yet.
+
+Jonathan
+
+Received: from void (TCP 2206400236) by AI.AI.MIT.EDU 25 Aug 88 23:32:41 EDT
+Received: by VOID.AI.MIT.EDU; Thu, 25 Aug 88 23:32:23 edt
+Date: Thu, 25 Aug 88 23:32:23 edt
+From: jar@VOID.AI.MIT.EDU (Jonathan Rees)
+Message-Id: <8808260332.AA09063@void>
+To: scheme-48@ai
+Subject: Non-release of C VM
+Reply-To: jar@zurich.ai.mit.edu
+
+
+Bob Brown has been hard at work on a C version of the Scheme-48
+virtual machine.  It works.  If anyone on this list wants to look at
+it, it's available by FTP from
+
+	zurich.ai.mit.edu:/pub/jar/s48.tar
+	zurich.ai.mit.edu:/pub/jar/s48.tar.Z   (compressed)
+
+Anonymous login works.  Have fun.
+
+Date: Wed, 29 Jun 88 14:47:56 EDT
+From: Jonathan A Rees <JAR@AI.AI.MIT.EDU>
+Subject:  bugs in fixnum arithmetic
+To: SCHEME-48@AI.AI.MIT.EDU
+Message-ID: <405100.880629.JAR@AI.AI.MIT.EDU>
+
+Enough people now have copies of the sources that I figure I should
+start posting bug reports and fixes here.
+
+I just noticed that the least and greatest target fixnum values (in
+data.scm) appear to be off by a factor of 2.  Also, there are some
+problems with *-carefully: first, it assumes that bits-per-target-fixnum
+is even; second, it fails if the product happens to be the least fixnum.
+
+I'm working on fixes and test cases.
+
+Received: from uicbert.eecs.uic.edu (TCP 20076123031) by AI.AI.MIT.EDU 29 Jun 88 13:16:42 EDT
+Received: by uicbert.eecs.uic.edu (UIUC-5.52/9.7)
+	id AA10180; Wed, 29 Jun 88 11:18:25 CST
+Date: Wed, 29 Jun 88 11:18:25 CST
+From: wilson@uicbert.eecs.uic.edu (Paul Wilson)
+Message-Id: <8806291718.AA10180@uicbert.eecs.uic.edu>
+To: scheme-48@ai.ai.mit.edu
+Subject: help understanding Scheme-48?
+Cc: wilson@uicbert.eecs.uic.edu
+
+
+I am looking for ANY KIND or degree of documentation
+for Scheme-48;  it doesn't have to be pretty;  random notes
+someone has scrawled would be better than nothing.
+
+Any aspects of Scheme-48 are of interest, including
+the VM (e.g., stack and register conventions) and the
+compiler.  Is there an explicit description of any of these
+components anywhere?
+
+Thanks,
+
+Paul
+
+Paul R. Wilson                         
+Electronic Mind Control* Laboratory
+U. of Illin. at C. EECS Dept. (M/C 154)     wilson%uicbert@uxc.cso.uiuc.edu
+Box 4348   Chicago,IL 60680   (* a.k.a. Human-Computer Interaction)
+
+
+Date: Mon, 13 Jun 88 18:49:51 EDT
+From: Jonathan A Rees <JAR@AI.AI.MIT.EDU>
+Subject:  ack rec, req doc
+To: wilson@UICBERT.EECS.UIC.EDU
+cc: SCHEME-48@AI.AI.MIT.EDU
+In-reply-to: Msg of Mon 13 Jun 88 12:14:09 CST from wilson@uicbert.eecs.uic.edu (Paul Wilson)
+Message-ID: <396880.880613.JAR@AI.AI.MIT.EDU>
+
+[Hope you don't mind my cc'ing the reply.]
+
+    Date: Mon, 13 Jun 88 12:14:09 CST
+    From: wilson@uicbert.eecs.uic.edu (Paul Wilson)
+
+    Do you have any documentation to speak of, discussing
+    design decisions, etc.?  Or do you perhaps know of good
+    sources of such info for modern lisps?
+
+Richard and I want to write it up, since it has all kinds of interesting
+properties and modularities, but so far there's nothing.  I think the
+writing will have to wait until the fall when (it is to be hoped) we are
+done with our present projects.
+
+    I would also be very interested in progress translating
+    Scheme-48 into C.
+
+I have put you on the Scheme-48 mailing list.  If anything becomes
+available, it will be announced there.
+
+    Currently, we are working on a plain-old non-bytecoded
+    subset Scheme in C.  It is intended to be considerably
+    more sophisticated and efficient than, say, SIOD, but
+    much smaller than Scheme-48 is now.
+
+Any insight as to why Scheme-48 is so big would be appreciated.  The
+main reason it was written was to try to answer the question of why
+implementations of Scheme, which on the surface is so simple, always
+seem to grow to be so large and unmanageable.  Is it that the full
+language is actually hairy, that acceptable efficiency is inherently
+difficult, that internal modularity (e.g. parameterizing over data
+representations or target machine architecture) implies significant
+conceptual overhead, or what?
+
+I intend to strip down the reader at least, and possibly the bytecode
+compiler, but it's hard to see what else can go.  If you see anything
+that can reasonably be ditched or streamlined, please point it out.
+
+    If possible, we'd like to make our code as generic as
+    possible so we could reuse others', and vice versa.  It
+    would be nice to be able to scrounge a passable compiler
+    and port it, for example, and we'd be glad to give away
+    the garbage collector we intend to implement.  (A variant
+    of Generation Scavenging we've come up with.)
+
+Sounds good.  Would be nice to be able to plug that into scheme-48.
+Feel free to take any pieces of scheme-48 that you want, too.
+
+I would also like to see someone write a really simple, low-tech,
+modular native code compiler for Scheme.
+
+Date: Wed,  1 Jun 88 18:34:26 EDT
+From: Jonathan A Rees <JAR@AI.AI.MIT.EDU>
+Subject:  update
+To: yunexus!oz@UUNET.UU.NET
+cc: SCHEME-48@AI.AI.MIT.EDU
+Message-ID: <389652.880601.JAR@AI.AI.MIT.EDU>
+
+As it turned out, Richard Kelsey got tired of waiting for me to make S48
+work, so I sent him my broken system, and he went and debugged it
+himself.  I have sent you his working, up-to-date version.  It runs in
+T; if you have access to a Sun, Apollo, HP 9000/3x0, Encore, Alliant, or
+VAX/Unix system, you can get T 3.1, which should run this version of S48
+just fine.  I'm trying to put together a new version of Pseudoscheme
+which will be up to the task of running S48 under VAX LISP; the current
+Pseudoscheme doesn't quite make it.
+
+Another bit of news: a graduate student here, Bob Brown, has become
+interested in the possibility of using S48 as the basis on which to
+build a parallel Scheme (actually FX, which is a statically typed
+Scheme) for the Encore multiprocessor.  He's now in Cambridge, England
+for a few weeks, and was considering doing a translation of the S48 VM
+into C himself while there.
+
+Date: Wed, 11 May 88 11:45:34 EDT
+From: Jonathan A Rees <JAR@AI.AI.MIT.EDU>
+Subject:  naming Schemes
+To: emo@IUVAX.CS.INDIANA.EDU
+cc: SCHEME-48@AI.AI.MIT.EDU
+In-reply-to: Msg of Tue 10 May 88 12:17:50 EST from Eric Ost <emo@iuvax.cs.indiana.edu>
+Message-ID: <375463.880511.JAR@AI.AI.MIT.EDU>
+
+    Date: Tue, 10 May 88 12:17:50 EST
+    From: Eric Ost <emo@iuvax.cs.indiana.edu>
+    To:   jar@ai.ai.mit.edu
+    Re:   naming Schemes
+
+    Have you arrived at a new name for Scheme-48?
+
+Not yet.  It's a pain to have to explain the 48 to everyone (T had the
+same problem), and the confusion with Scheme-84 is inconvenient.  Here
+are some suggestions from someone who I won't embarrass by naming:
+
+       EZScheme
+       Scheme'n'Stuff
+       Schemette
+       Scheme Lite  Skeme Lite  Skeem Lite
+
+    What is the status of the C implementation of the
+    virtual machine?
+
+Ozan Yigit, who has volunteered to translate the Scheme version of the
+VM into C, has been waiting for months for me to send him a working
+Scheme version.  I haven't got around to debugging what I have.  Richard
+Kelsey has also been waiting, and finally decided to debug my code
+himself; he seems to have the virtual machine working now, and the
+runtime system will follow at some point.  When the runtime system is
+working I'll get Richard's changes and send the new version to Ozan and
+anyone else who wants it.
+
+Date: Thu, 17 Mar 88 20:30:48 EST
+From: Jonathan A Rees <JAR@AI.AI.MIT.EDU>
+Subject:  new version not done
+To: SCHEME-48@AI.AI.MIT.EDU
+Message-ID: <343434.880317.JAR@AI.AI.MIT.EDU>
+
+
+I have made all the changes I wanted for this round (except for allowing
+interrupts out of READ-CHAR), now it's a mere matter of debugging.  The
+GC seems to work still, and the interpreter and compiler seem to compile
+and load OK; I just have to try booting the system now.  For those
+interested, I have put the latest version on the AI: S48; directory.
+Here's an overview of what's there.  I'll let y'all know when it works.
+
+    General stuff: system configuration, etc.
+	load      - load the system into pseudoscheme
+			Shows module interdependencies.
+	module    - a toy module system (currently in terms of packages)
+	sigs	  - rudimentary interface specifications 
+			("signatures", in ML parlance)
+       	features  - tables & other useful data types
+	pfeatures - version of features specialized for pseudoscheme
+	
+    "Bare machine": a sort of assembly language
+	bare      - fixnum arithmetic, etc.
+	pbare     - version of bare for pseudoscheme
+	ascii	  - char->ascii and vice versa
+	enum	  - enumerated types
+	run	  - GOTO, DISPATCH, RUN-MACHINE
+
+    Data representations and GC:
+	memory	  - low-level access to memory
+	data	  - descriptors
+	struct	  - CAR, PAIR?, VECTOR-REF, etc.
+	vmio	  - low-level i/o
+	stack	  - push, pop
+	gc	  - collect, disk-save, disk-restore
+
+    Interpreter:
+	arch	  - list of opcodes & exceptions
+	istruct	  - templates & continuations
+	interp	  - bytecode interpreter
+	prim	  - the primitives
+	resume    - not much
+
+    An alternative implementation of the data reps. and GC:
+	stub
+
+    Compiler:
+	(also uses arch, istruct)
+	derive	  - macros
+	comp	  - most of the compiler
+	cprim	  - compile-primitive-call
+
+    Bootstrap code:
+	boot	  - cold load stuff
+	transport - enter and extract
+
+    Runtime system: (as before)
+	(also arch, istruct)
+	basic
+	io
+	sys
+	ssig	  - scheme signature
+
+Date: Thu, 24 Dec 87 01:58:44 EST
+From: Jonathan A Rees <JAR@AI.AI.MIT.EDU>
+Subject:  files coming
+To: mnetor!yunexus!oz@UUNET.UU.NET
+cc: S48@AI.AI.MIT.EDU
+Message-ID: <303548.871224.JAR@AI.AI.MIT.EDU>
+
+
+I'm going to send you the complete sources for the VM, in their current
+state.  I haven't tested the i/o system yet, and the only primitives
+I'ved tried are + and CONS (op/d-vector).  I did test the interprete
+quite a bit, and the GC a little, which hasn't changed.  I made some
+changes to restore-image that I haven't tested.
+
+[For the MIT folks on the S48 list, these files are in AI: X48; ]
+
+There are currently nine .scm files for the VM proper:
+
+	arch    - architecture description
+	data	- low-level data representations
+	gc	- gc, save-image, and restore-image
+	struct	- data structure definitions (pairs, etc.)
+	regs	- the machine registers
+	run	- driver loop
+	interp  - interpreter
+	prim	- data manipulation primitives (+, vector-ref, etc.)
+	vmio	- i/o system
+
+I'll also send you the following by way of documentation:
+
+	assem	- an assembler and disassembler
+	package	- package setup for scheme-in-common-lisp
+	boot	- initialization code
+
+I'll do more work over the weekend.  I'll keep track of what I'm
+changing and keep you posted as I find fixes.
+
+Have fun...
+
+Date: Wed, 23 Dec 87 18:07:06 EST
+From: Jonathan A Rees <JAR@AI.AI.MIT.EDU>
+Subject:  interpreter
+To: yunexus!oz@UUNET.UU.NET
+cc: S48@AI.AI.MIT.EDU
+In-reply-to: Msg of Wed 23 Dec 87 10:45:33 EST from yunexus!oz at uunet.UU.NET (Ozan Yigit)
+Message-ID: <303475.871223.JAR@AI.AI.MIT.EDU>
+
+I hereby proclaim the new version of the interpreter to be working.  I
+have rewritten the i/o system and the primitives; now just a little
+debugging and I should be done.
+
+If you get the interpreter, GC, and RESUME translated, it's possible to
+test heaps that don't need primitives by resuming and then examining the
+value register when the system halts.  I'll send you such a heap if you
+like.  But programs without primitives aren't very interesting.
+
+Here's an idea for how to debug: get two terminals (or windows).  Run a
+Scheme (C Scheme, T, or pseudoscheme-in-common lisp) in one window, with
+S48 running simulated.  Run your C system in the other window.  Have
+both print debugging informat as they go.  If the two do different
+things at any point, you have found a bug.  I forget, what kind of computer
+will you be using for debugging?
+
+Date: Sat, 19 Dec 87 10:38:33 EST
+From: Jonathan A Rees <JAR@AI.AI.MIT.EDU>
+Sender: JAR0@AI.AI.MIT.EDU
+Subject:  miscellaneous...
+To: yunexus!oz@UUNET.UU.NET
+cc: S48@AI.AI.MIT.EDU
+In-reply-to: Msg of Fri 18 Dec 87 15:20:53 EST from yunexus!oz at uunet.UU.NET (Ozan Yigit)
+Message-ID: <301943.871219.JAR0@AI.AI.MIT.EDU>
+
+    Date: Fri, 18 Dec 87 15:20:53 EST
+    From: yunexus!oz at uunet.UU.NET (Ozan Yigit)
+
+    ... it should be
+    	(and (immediate? descriptor))
+
+Right you are.  Thanks for spotting this.
+
+Date: Fri, 18 Dec 87 11:01:52 EST
+From: Jonathan A Rees <JAR@AI.AI.MIT.EDU>
+Subject:  [willc%tekchips.tek.com: byte codes]
+To: S48@AI.AI.MIT.EDU
+Message-ID: <301530.871218.JAR@AI.AI.MIT.EDU>
+
+More data from Will...
+
+Date: 15 Dec 87 16:27:12 PST (Tue)
+From: willc%tekchips.tek.com at RELAY.CS.NET
+To:   JAR at mc.lcs.mit.edu
+Re:   byte codes
+
+I will be able to give you a detailed answer for MacScheme when I can
+remember to bring in the information you requested.
+
+In MacScheme, the procedure objects corresponding to (most) primitives
+are created as needed by the compiler using source-to-source transformations
+such as (eq? car car) ==> (eq? (lambda (x) (car x)) (lambda (x) (car x))).
+This is why (eq? car car) doesn't return true in MacScheme.  Some day I may
+change the bootstrap code to store a canonical procedure object for each
+primitive into the table of primitives used by the compiler.
+
+Date: Fri, 18 Dec 87 11:00:55 EST
+From: Jonathan A Rees <JAR@AI.AI.MIT.EDU>
+Subject:  [willc%tekchips.tek.com: byte codes]
+To: S48@AI.AI.MIT.EDU
+Message-ID: <301529.871218.JAR@AI.AI.MIT.EDU>
+
+I asked Will Clinger some questions about byte codes in MacScheme.  Here
+is his answer.
+
+Date: 16 Dec 87 17:56:07 PST (Wed)
+From: willc%tekchips.tek.com at RELAY.CS.NET
+To:   JAR at mc.lcs.mit.edu
+cc:   adams%tekchips.tek.com at RELAY.CS.NET,
+      willc%tekchips.tek.com at RELAY.CS.NET
+Re:   byte codes
+
+By the number of byte codes, you might mean the number of different 8-bit
+patterns that make up the first (and often the only) byte of an instruction,
+or you might mean the number of different instructions.  It's hard to know
+sometimes whether two 8-bit codes should count as distinct instructions or
+as two distinct encodings of the same instruction.  The dynamic instruction
+frequencies are much more meaningful than either of the previous numbers,
+in my opinion.  It's also hard to know how to categorize some instructions.
+For example, there are nine opcodes of the "move multiple" variety, but
+I classified them as control operations rather than as stack/environment/
+register operations because the MacScheme compilers (past and present)
+emit them only as part of a procedure call.  As another example, the
+instruction that was added especially to support APPLY is called "jump"
+and is classified as a control operation instead of an "other primitive".
+
+Number    Number of    Approximate
+of 8-bit  instructions dynamic
+opcodes                frequency
+(V 1.5)   (V 1.5)      (V 1.0)
+
+30        30            8   %  scalar like +;
+28        28           10   %  data access like CAR and VECTOR-REF
+ 6         6            1   %  I/O
+13        13             .5 %  other primitives like APPLY
+92        32           55   %  stack, environment, and register operations
+42        18           25   %  control operations (jump, call, return, etc.)
+
+The remaining 45 opcodes are illegal.
+
+Interesting numbers.  Peace, Will
+
+Date: Fri, 18 Dec 87 10:58:27 EST
+From: Jonathan A Rees <JAR@AI.AI.MIT.EDU>
+Subject:  miscellaneous...
+To: mnetor!yunexus!oz@UUNET.UU.NET
+cc: S48@AI.AI.MIT.EDU
+In-reply-to: Msg of Wed 16 Dec 87 16:58:17 EST from yetti!oz at uunet.UU.NET (Ozan Yigit)
+Message-ID: <301528.871218.JAR@AI.AI.MIT.EDU>
+
+    Date: Wed, 16 Dec 87 16:58:17 EST
+    From: yetti!oz at uunet.UU.NET (Ozan Yigit)
+
+    	the following piece of code is either buggy, or
+    	I am missing something subtle:
+    	-------
+    (define (immediate-predicate type)
+      (lambda (descriptor)					<---- ???
+        (and (immediate? (descriptor-tag descriptor))	<---- ???
+    	 (=& (immediate-type descriptor) type))))
+
+    (define $false?     (immediate-predicate imm/false))
+    (define $...	    (immediate-predicate ...))
+    	-------
+    	Should this not be written as the following?
+    	-------
+    (define ($false? descriptor)
+    	(and (immediate? descriptor)
+    	     (=& (immediate-type descriptor) imm/false)))
+    	-------
+
+You have discovered one of the things that makes Scheme so powerful:
+first-class procedures promote modularity.  The rewrite you suggest is
+correct, but note that that knowledge of how to test for the type of an
+imeediate is replicated many times, with a set of N procedures that
+differ in only one place.  The way I have written it factors out this
+knowledge into a general predicate-generating operator that takes an
+immediate type code and returns a procedure that will test an immediate
+to see if it has that type.  (My version is also more concise than the
+expanded version, with 3+N lines of code instead of 3N lines.)
+Unfortunately, C doesn't have first-class procedures, so you'll have to
+expand the code (which amounts to substituting the definition of
+IMMEDIATE in-line).
+
+    	I am also somewhat confused as to the predicate
+    	naming strategy $names vs names... I am not sure if
+    	this is entirely consistent throughout the code. I am
+    	assuming anything $name is the fundamental building
+    	block for the simulator, used to define all the
+    	user-accessible scheme predicates.
+
+I introduce a $-name in the VM only when there would be a name conflict
+with an existing Scheme primitive or some routine in the S48 runtime
+system (as opposed to the VM).  This may not be entirely consistent
+throughout, in that there may be $-things that have non non-$ version.
+I would like to use the name CAR instead of $CAR, but if I do then when
+run in simulation I clobber the "real" CAR binding of CAR.  I'm
+considering having a preprocessor run over the VM files to rename CAR to
+$CAR etc. so I can just write CAR in the source code, but I think
+that may be a little too high-tech.
+
+Keep those questions coming...
+
+Date: Mon, 14 Dec 87 18:42:07 EST
+From: Jonathan A Rees <JAR@AI.AI.MIT.EDU>
+Subject:  status report
+To: yetti!oz@UUNET.UU.NET
+cc: S48@AI.AI.MIT.EDU
+Message-ID: <299552.871214.JAR@AI.AI.MIT.EDU>
+
+Well, version 0.3 isn't done yet, and I won't have a chance to work on it
+again until maybe Saturday or so.
+
+(I have adopted this numerology:
+  version 0.0 = the one that was done in 48 hours in Aug. '86.
+  version 0.1 = a version from Feb. '87 that I hardcopied and distributed
+   to a few friends.
+  version 0.2 = an improved version (Mar. '87) that I sent to you, the
+   most recent working version.
+  version 0.3 = the one I hope to finish in the next week or two, with
+   new instruction set, open-coded primitives, etc.
+  version 0.4 = projected for Jan. or Feb., with real stacks and other
+   marvels.
+  ...
+  version 1.0 = the one that gets published as an MIT AI memo.)
+
+If you want to get started on it as soon as this week, then I think you
+have two choices:
+
+(a) start with version 0.2, keeping in mind that some parts will be trashed
+    when 0.3 comes along.
+
+(b) start working on what there is of 0.3, even though it isn't really
+    done yet and is probably bug-ridden.
+
+If you can wait another week or two, I can send you a working 0.3.
+
+Actually I really don't think that the C version of either the 0.2 or
+0.3 VM is such a big deal, so if you have the time and are really eager
+to get going, I would recommend option (a), knowing that some of it will
+be thrown away.  This has the advantage that it provides immediate
+gratification (something that's important to me) and it's not a moving
+target.  I'm still willing to construct and mail you heap images (we
+can start with small ones).  The GC and data representations are
+practically identical in 0.2 and 0.3.
+
+Should I send you my incomplete 0.3 VM to help you decide?
+
+Sorry, such schedule changes are inevitable when you're on the cutting
+edge...
+
+Date: Mon, 14 Dec 87 18:40:40 EST
+From: Jonathan A Rees <JAR@AI.AI.MIT.EDU>
+Subject:  S48 mailing list
+To: S48@AI.AI.MIT.EDU
+cc: JTW@AI.AI.MIT.EDU, PGS@AI.AI.MIT.EDU
+Message-ID: <299550.871214.JAR@AI.AI.MIT.EDU>
+
+
+I have created a mailing list at MIT-AI with the following names:
+
+	S48
+	SCHEME48
+	SCHEME-48
+
+whose members are currently
+
+	JAR@AI
+	Kelsey@Yale.EDU
+	yetti!oz@uunet.UU.NET
+
+and an archive file AI: S48; S48 MAIL.
+
+JTW and PGS -- add yourselves if you like.
+

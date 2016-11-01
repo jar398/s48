@@ -1,0 +1,50 @@
+; -*- Mode: Scheme; Syntax: Scheme; Package: bare-machine; -*-
+
+; This is file run.scm.
+
+;;;; Control primitives
+
+(declare (do-not-integrate opcode-dispatch)
+	 (do-not-integrate-arguments
+	    goto
+	    computed-goto
+	    label
+	    run-machine))
+
+; Driver loop
+
+(define *halt* (unassigned))
+
+(define (run-machine start-tag)
+  (call-with-current-continuation
+      (lambda (halt)
+	(set! *halt* halt)
+	(driver-loop start-tag))))
+
+(define (driver-loop start-tag)
+  (let loop ((tag start-tag))
+    (loop (tag))))
+
+(define (halt-machine)
+  (*halt* #f))
+
+(define (goto tag)
+  ;(tag)   ; If tail-recursion works
+  tag	   ; If tail-recursion doesn't work
+  )
+
+; Assigned goto (e.g. for return addresses)
+
+(define (label tag)
+  tag)     ; Declaration for (set! *finished* ...)
+
+(define computed-goto goto)
+
+; Dispatch
+
+(define make-dispatch-table %make-vector)
+
+(define define-dispatch! %vector-set!)
+
+(define (dispatch table tag)
+  ((%vector-ref table tag)))

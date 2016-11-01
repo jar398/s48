@@ -1,0 +1,2547 @@
+; -*- Mode: Scheme; Syntax: Scheme; Package: Scheme; -*-
+
+; This is file interfaces.scm.
+
+;;;; Minimal interface descriptions
+
+; (Very crude, currently used only for setting up packages in Common Lisp.)
+
+; VM-NEEDS: things defined externally to the VM proper.
+
+(define vm-needs
+  '(
+    define
+    lambda let let* begin set!
+    if cond case and or else
+    letrec do
+
+    not
+    error
+    unassigned
+
+    define-enumeration
+
+    enforce assert
+    +& -& *& <& <=& =& >=& >& quotient& remainder&
+    adjoin-bits low-bits high-bits
+    expt				;1st arg is always 2
+    ascii->char char->ascii
+    char=? char<?
+
+    %make-vector %vector-ref %vector-set! %vector-length
+    %vector-posq
+    %make-string %string-set!
+
+    ;; The following are only used for checking for overflow!
+    + - * < <= = >= > quotient remainder
+
+    ;; I/O
+    read-char write-char write-string
+    newline
+    eof-object?
+    open-input-file open-output-file
+    close-input-port close-output-port
+    write read				; -- used only by SUSPEND and RESUME
+    call-with-output-file call-with-input-file ;ditto
+    current-input-port current-output-port
+
+    ;; For convenience at top level
+    load compile-file cf lf lrin compile lisp:disassemble
+    lisp:in-package lisp:import lisp:export
+    #+DEC vax-lisp:debug #+DEC vax-lisp:continue
+    lisp:trace lisp:untrace
+
+    ;; For debugging only
+    enumerand->name name->enumerand
+    enter
+    extract
+    boot
+    run
+    ))
+
+(define vm-exports-without-conflict
+  '(
+    ;; Used by transporter
+    enter-fixnum extract-fixnum
+    enter-char   extract-char
+    extract-string
+    table-size
+    *symbol-table*
+    *system-environment*
+
+    ;; Things that the block compiler knows about
+    define-opcode
+    goto
+    label
+    run-machine
+    uuo
+
+    ;; Needed by bootstrap
+    clear-registers
+    clear-interrupt-registers
+    initialize-machine
+    initialize-memory
+    initialize-i/o-system
+    initialize-heap
+    *exception-handlers*
+    *interrupt-handlers*
+    *val*
+    *nargs*
+
+    ;; Needed for startup, and just for fun
+    perform-application
+    interpret
+    resume
+    handle-exception
+    ))
+
+(define vm-exports-with-conflict
+  '(
+    define-macro
+    
+    ;; Data manipulation (scalar and compound)
+    car
+    cdr
+    cell-name
+    cell?
+    char?
+    closure
+    closure-env
+    closure-template
+    closure?
+    code-vector-length
+    code-vector-ref
+    code-vector-set!
+    code-vector?
+    cons
+    contents
+    eof-object
+    eq?
+    f
+    false?
+    fixnum?
+    intern
+    length
+
+    lookup
+    make-closure
+    make-code-vector
+    make-port
+    make-string
+    make-vector
+    null
+    pair?
+    set-contents!
+    string-set!
+    string?
+    symbol->string
+    symbol?
+    t
+    unspecified
+    vector-fill!
+    vector-length
+    vector-ref
+    vector-set!
+    vector?
+    ))
+
+#|
+    ;; Control
+    run-machine halt-machine
+    goto computed-goto label
+    make-dispatch-table define-dispatch! dispatch
+
+    ;; Used by interpreter
+    collect
+    time-to-collect?
+    available?
+    unassigned-marker
+    unbound-marker
+    undefined?
+
+    ;; Interpreter data structures
+    continuation-cont
+    continuation-env
+    continuation-pc
+    continuation-stack
+    continuation-template
+    make-continuation
+    template-code
+|#
+
+; -*- Mode: Scheme; Syntax: Scheme; -*-
+
+; This is file arch.scm.
+
+;;;; Architecture description
+
+; Things that the VM and the runtime system both need to know.
+
+; Bytecodes: for compiler and interpreter
+
+(define-enumeration op
+  (check-nargs=	      ;nargs   -- error if *nargs* not= operand
+   check-nargs>=      ;nargs   -- error if *nargs* < operand
+   make-env           ;nargs   -- cons an environment
+   pop-env	      ;	       -- set *env* = parent of *env*
+   make-rest-list     ;nargs   -- cons a rest-argument list
+   literal            ;index   -- value to *val*
+   local	      ;back over
+   set-local!	      ;back over
+   global	      ;index   -- value to *val*
+   set-global!	      ;index   -- new value in *val*
+   make-closure	      ;index   -- environment in *env*
+   push               ;        -- push *val* onto stack
+   pop		      ;	       -- pop top of stack into *val*
+   make-cont          ;delta   -- save state
+   call		      ;nargs   -- proc in *val*, state in *cont*
+   jump-if-false      ;delta   -- boolean in *val*
+   jump		      ;delta
+   return	      ;	       -- continuation in *cont*, value in *val*
+   push-cont	      ;	       -- (for catch) push *cont* onto stack
+   pop-cont	      ;	       -- (for throw) pop *cont* off stack
+   spread-args	      ;nargs   -- spread argument list, push operand+length
+   n-call	      ;	       -- call; pop nargs off stack
+   native	      ;	       -- start running native code (?)
+
+   ;; Interpreter primitives
+   halt 
+   unassigned
+   set-enabled-interrupts!
+
+   ;; Scalar primitives
+   eq?
+   fixnum?
+   + - * = <
+   quotient remainder
+   char?
+   char=?
+   char<?
+   char->ascii
+   ascii->char
+
+   ;; Data manipulation
+   stob-of-type?      ;type
+   make-d-vector      ;type
+   d-vector	      ;type size -- values to store are on stack, last in *val*
+   d-vector-ref	      ;type
+   d-vector-set!      ;type      -- value to store is on stack
+   d-vector-length    ;type
+   make-b-vector      ;type
+   b-vector-ref       ;type
+   b-vector-set!      ;type
+   b-vector-length    ;type
+
+   suspend
+   open-port
+   close-port
+   input-port?
+   output-port?
+   read-char
+   peek-char
+   write-char
+
+   ;; Unnecessary primitives
+   write-string
+   string=?
+   string-hash
+   reverse-list->string
+   intern
+   lookup
+   ))
+
+; Machine state: for exception generators and handlers.
+;  This is very sloppy -- tighten it up.
+
+(define-enumeration register
+  (
+   ;; Ephemeral; exception handlers must be able to examine
+   val
+   arg2
+   arg3
+   ;; Redundant with interpreter state (continuation)
+   template
+   env
+   cont
+   stack
+   ;; GC needs to update these, but otherwise they never change.
+   interrupt-handlers
+   exception-handlers
+   symbol-table
+   system-environment
+   ))
+
+; Exception types: for exception generators and handlers.
+;  - How fine should the granularity be?
+
+(define-enumeration exception
+  (unassigned-local
+   undefined-global      ;cell in *val* is unbound or unassigned
+   unbound-global        ;cell in *val* is unbound (for set!)
+   bad-procedure
+   wrong-number-of-arguments
+   wrong-type-argument
+   arithmetic-overflow
+   index-out-of-range    ;bad index to vector-ref or string-ref
+   heap-overflow	 ;(make-vector huge)
+   file-not-found
+   operation-on-closed-port
+   uuo			 ;unimplemented instruction
+   ))
+
+; Interrupts
+
+(define-enumeration interrupt
+  (none
+   keyboard  ;alarmclock, ...
+   ))
+
+; -*- Mode: Scheme; Syntax: Scheme; Package: S48; -*-
+
+; This is file regs.scm.
+
+;;;; Interpreter registers
+
+; The following are pushed by make-continuation.
+(define *template*	     unspecified)
+(define *env*		     unspecified)
+(define *cont*		     unspecified)
+(define *stack*		     unspecified)
+
+; The following aren't.
+(define *val*		     unspecified) ; = arg1
+(define *arg2*		     unspecified)
+(define *arg3*		     unspecified)
+
+; These are traced by the GC, but otherwise unchanging.
+(define *exception-handlers* unspecified)
+(define *interrupt-handlers* unspecified)
+(define *symbol-table*	     unspecified) ;Used only by ENTER, for bootstrap
+(define *system-environment* unspecified) ;Used only by ENTER, for bootstrap
+
+(define (make-machine-state)
+  (let ((m (make-vector (vector-length register))))
+    (save-registers m)
+    m))
+(define machine-state-ref  vector-ref)
+(define machine-state-set! vector-set!)
+
+(define (save-registers m)
+  (machine-state-set! m register/val          *val*)
+  (machine-state-set! m register/arg2         *arg2*)
+  (machine-state-set! m register/arg3         *arg3*)
+  (machine-state-set! m register/template     *template*)
+  (machine-state-set! m register/env	      *env*)
+  (machine-state-set! m register/cont	      *cont*)
+  (machine-state-set! m register/stack        *stack*)
+  (machine-state-set! m register/exception-handlers *exception-handlers*)
+  (machine-state-set! m register/interrupt-handlers *interrupt-handlers*)
+  (machine-state-set! m register/symbol-table *symbol-table*)
+  (machine-state-set! m register/system-environment *system-environment*))
+
+(define (restore-registers m)
+  (set! *val*      (machine-state-ref m register/val))
+  (set! *arg2*     (machine-state-ref m register/arg2))
+  (set! *arg3*     (machine-state-ref m register/arg3))
+  (set! *template* (machine-state-ref m register/template))
+  (set! *env*      (machine-state-ref m register/env))
+  (set! *cont*	   (machine-state-ref m register/cont))
+  (set! *stack*    (machine-state-ref m register/stack))
+  (set! *exception-handlers* (machine-state-ref m register/exception-handlers))
+  (set! *interrupt-handlers* (machine-state-ref m register/interrupt-handlers))
+  (set! *symbol-table*       (machine-state-ref m register/symbol-table))
+  (set! *system-environment* (machine-state-ref m register/system-environment)))
+
+; This is needed only for bootstrap purposes.
+
+(define (clear-registers)
+  (set! *template*   quiescent)
+  (set! *val*        quiescent)
+  (set! *env*        quiescent)
+  (set! *cont*       quiescent)
+  (set! *stack*      quiescent))
+
+; -*- Mode: Scheme; Syntax: Scheme; Package: S48; -*-
+
+; This is file interp.scm.
+
+;;;; The interpreter
+
+(define *pc* (unassigned))
+(define *nargs* (unassigned))
+(define *exception* (unassigned))
+(define *pending-interrupt* (unassigned))
+(define *enabled-interrupts* (unassigned))
+(define *retrying-after-gc?* (unassigned))
+
+(define (clear-interrupt-registers)	;Used only for bootstrap and debugging
+  (set! *pc*         -1)
+  (set! *retrying-after-gc?* #f)
+  (set! *pending-interrupt* interrupt/none)
+  (set! *enabled-interrupts* 0)
+  unspecified)
+
+(define (initialize-machine)		;Used only for bootstrap
+  ;; Pre-allocate the root so we don't have to cons it at GC time.
+  (set! *root*               (make-vector (%vector-length register)))
+  (set! *exception-handlers* (make-vector (%vector-length exception)))
+  (set! *interrupt-handlers* (make-vector (%vector-length interrupt)))
+  unspecified)
+
+; Stack manipulation
+
+(define (push x)
+  (set! *stack* (cons x *stack*)))
+
+(define (pop)
+  (let ((arg (car *stack*)))
+    (set! *stack* (cdr *stack*))
+    arg))
+
+(define (push-interpreter-state pc)
+  (let ((cont (make-continuation
+	        (enter-fixnum pc)
+		*template* *env* *cont* *stack*)))
+    (set! *stack* cont)
+    (set! *cont* cont)))
+
+(define (pop-interpreter-state)
+  (let ((cont *cont*))
+    (set! *pc*       (extract-fixnum (continuation-pc cont)))
+    (set! *template* (continuation-template cont))
+    (set! *env*      (continuation-env cont))
+    (set! *cont*     (continuation-cont cont))
+    (set! *stack*    (continuation-stack cont))))
+
+; Instruction stream access
+
+(define (next-byte)
+  (let ((b (code-vector-ref (template-code *template*) *pc*)))
+    (set! *pc* (+& *pc* 1))
+    b))
+
+;(define (previous-byte)  probably not necessary
+;  (set! *pc* (-& *pc* 1)))
+
+(define next-offset next-byte)
+
+(define (next-literal)
+  (vector-ref *template* (next-byte)))
+
+; Environment access
+
+(define make-rib make-vector)
+(define rib-ref  vector-ref)
+(define rib-set! vector-set!)
+(define (rib-parent rib) (rib-ref rib 0))
+
+(define (env-back env back)  ;Resembles NTHCDR
+  (do ((env env (rib-parent env))
+       (i back (-& i 1)))
+      ((=& i 0) env)))
+
+; Auxiliary
+
+(define (raise exc)
+  (set! *exception* exc)
+  (goto handle-exception))
+
+; INTERPRET is the main instruction dispatch for the interpreter.
+
+(define (interpret)
+  (cond ((time-to-collect?)
+	 (save-registers *root*)
+	 (set! *finished* (label return-to-interpreter-after-gc))
+	 (goto collect))
+	(else
+	 ;; (display-interpreter-state)
+	 (dispatch opcode-dispatch (next-byte)))))
+
+(define (return-to-interpreter-after-gc)
+  (restore-registers *root*)
+  (goto interpret))
+
+;;;; Opcodes
+
+(define (uuo)
+  (raise exception/uuo))
+
+(define opcode-dispatch
+  (make-dispatch-table (%vector-length op) (label uuo)))
+
+(define (define-opcode opcode tag)
+  (define-dispatch! opcode-dispatch opcode tag))
+
+; Check number of arguments
+
+(define-opcode op/check-nargs= (lambda ()
+  (cond ((=& *nargs* (next-byte))
+	 (goto interpret))
+	(else
+	 (raise exception/wrong-number-of-arguments)))))
+
+(define-opcode op/check-nargs>= (lambda ()
+  (cond ((>=& *nargs* (next-byte))
+	 (goto interpret))
+	(else
+	 (raise exception/wrong-number-of-arguments)))))
+
+; Environment creation
+;  The MAKE-ENV instruction adds a rib to the local environment.
+;  It pops values off the stack and stores them into the new
+;  rib.
+; Note!  We are assuming here that *MARGIN* is at least
+;  (+ byte-limit 2) cells -- that is, that we can allocate any rib
+;  the object code can ask for without having to first check that
+;  it's OK to do so.
+
+(define-opcode op/make-env (lambda ()
+  (set! *nargs* (next-byte))
+  (let ((rib (make-rib (+& *nargs* 1))))
+    (rib-set! rib 0 *env*)
+    (set! *env* rib)
+    (do ((i *nargs* (-& i 1)))
+	((<=& i 0)
+	 (goto interpret))
+      (rib-set! rib i (pop))))))
+
+(define-opcode op/pop-env (lambda ()
+  (set! *env* (rib-parent *env*))
+  (goto interpret)))
+
+; MAKE-REST-LIST
+;  Create a list to hold the rest of the arguments, and push it
+;  onto the stack.
+
+(define-opcode op/make-rest-list (lambda ()
+  (let ((min-nargs (next-byte)))
+    (cond ((available? (cells->a-units (*& (-& *nargs* min-nargs) 3)))
+	   (set! *retrying-after-gc?* #f)
+	   (do ((i *nargs* (-& i 1))
+		(l null (cons (pop) l)))
+	       ((=& i min-nargs)
+		(push l)		;kludge
+		(set! *nargs* (+& min-nargs 1))
+		(goto interpret))))
+	  (else
+	   (set! *pc* (-& *pc* 2))	;Back out!
+	   (set! *finished* (label interpret))
+	   (goto collect-and-retry))))))
+
+(define (collect-and-retry)
+  (cond (*retrying-after-gc?*
+	 (set! *retrying-after-gc?* #f)
+	 (raise exception/heap-overflow))
+	(else
+	 (set! *retrying-after-gc?* #t)
+	 (goto collect))))
+
+; Literals
+
+(define-opcode op/literal (lambda ()        ;Load a literal into *val*.
+  (set! *val* (next-literal))
+  (goto interpret)))
+
+; Local variable access and assignment
+
+(define-opcode op/local (lambda ()      ;Load value of a local.
+  (let ((back (next-byte)))
+    (set! *val* (rib-ref (env-back *env* back)
+			 (next-byte)))
+    (cond ((undefined? *val*)
+	   (raise exception/unassigned-local))
+	  (else
+	   (goto interpret))))))
+
+(define-opcode op/set-local! (lambda ()
+  (let ((back (next-byte)))
+    (rib-set! (env-back *env* back)
+	      (next-byte)
+	      *val*)
+    (set! *val* unspecified)
+    (goto interpret))))
+
+; Global variable access
+
+(define-opcode op/global (lambda ()        ;Load a global variable.
+  (let ((cell (next-literal)))
+    (set! *val* (contents cell))
+    (cond ((undefined? *val*)
+	   (set! *val* cell)
+	   (raise exception/undefined-global))
+	  (else
+	   (goto interpret))))))
+
+(define-opcode op/set-global! (lambda ()
+  (let ((cell (next-literal)))
+    (cond ((eq? (contents cell) unbound-marker)
+	   (raise exception/unbound-global))
+	  (else
+	   (set-contents! cell *val*)
+	   (set! *val* unspecified)
+	   (goto interpret))))))
+
+; Stack operations
+
+(define-opcode op/push (lambda ()	;Push *val* onto the stack.
+  (push *val*)
+  (goto interpret)))
+
+(define-opcode op/pop (lambda ()	;Pop a value off the stack into *val*.
+  (push *val*)
+  (goto interpret)))
+
+; LAMBDA
+
+(define-opcode op/make-closure (lambda ()
+  (set! *val* (make-closure (next-literal) *env*))
+  (goto interpret)))
+
+; Procedure call
+
+(define-opcode op/call (lambda ()
+  (set! *nargs* (next-byte))
+  (goto perform-application)))
+
+; Continuation creation & invocation
+
+(define-opcode op/make-cont (lambda ()   ;Start a non-tail call.
+  (let ((offset (next-offset)))
+    (push-interpreter-state (+& *pc* offset))
+    (goto interpret))))
+
+(define-opcode op/return (lambda ()      ;Invoke the continuation.
+  (pop-interpreter-state)
+  (goto interpret)))
+
+; IF
+
+(define-opcode op/jump-if-false (lambda ()
+  (let ((offset (next-offset)))
+    (cond ((false? *val*)
+	   (set! *pc* (+& *pc* offset))
+	   (goto interpret))
+	  (else
+	   (goto interpret))))))
+
+(define-opcode op/jump (lambda ()         ;Unconditional jump
+  (let ((offset (next-offset)))
+    (set! *pc* (+& *pc* offset))
+    (goto interpret))))
+
+; Push *cont* onto stack (this is used by call-with-current-continuation)
+
+(define-opcode op/push-cont (lambda ()
+  (push *cont*)
+  (goto interpret)))
+
+(define-opcode op/pop-cont (lambda ()
+  (set! *cont* (pop))
+  (goto interpret)))
+
+; First part of APPLY: spread an argument list onto the stack.
+;  This is going to be really gross because the list has to be reversed...
+;  At the end, be sure to push length of list + (next-byte) onto stack.
+;  In an implementation in which the stack can be randomly accessed, this
+;  would be much easier!
+;  Gotta make sure also that length does circularity checking.
+
+;(define-opcode op/spread-call (lambda ()
+;  (set! *nargs* (next-byte))
+;  (if (available? (*& 3 (length *val*)))
+;      (do (...) ((not (pair? val)) (set! *stack* ...) ...))
+;      ...)))
+
+; Second part of APPLY: perform a procedure call, where the number of arguments
+;  is popped off the stack.
+
+(define-opcode op/n-call (lambda ()
+  (set! *nargs* (extract-fixnum (pop)))
+  (goto perform-application)))
+
+; Miscellaneous primitive procedures
+
+(define-opcode op/halt
+  (lambda ()
+    (goto halt-machine)))
+
+(define-opcode op/unassigned
+  (lambda ()
+    (set! *val* unassigned-marker)
+    (goto interpret)))
+
+(define-opcode op/set-enabled-interrupts!
+  ;; New interrupt mask as fixnum in *val*
+  (lambda ()
+    (let ((temp *enabled-interrupts*))
+      (set! *enabled-interrupts* (extract-fixnum *val*))
+      (set! *val* (enter-fixnum temp))
+      (goto interpret))))
+
+;;;; Procedure call
+
+(define (perform-application)
+  (cond ((>& *pending-interrupt* 0)
+	 ;; Should back up...
+	 (goto handle-interrupt))
+	((closure? *val*)
+	 (set! *template* (closure-template *val*))
+	 (set! *env* (closure-env *val*))
+	 (set! *pc* 0)
+	 (goto interpret))
+	(else
+	 (raise exception/bad-procedure))))
+
+; This is losing.
+
+(define (handle-exception)
+  (error "Exception:" *exception*)  ; Flush when exceptions work again
+  ;; (error "Exception:" (enumerand->name *exception* exception))
+  (push-interpreter-state *pc*)
+
+  (push (enter-fixnum *exception*))
+  (push *cont*)
+  (push *val*)
+  (push (enter-fixnum *nargs*))
+  (set! *nargs* 4)
+
+  (set! *val* (vector-ref *exception-handlers* *exception*))
+  (goto perform-application))
+
+(define (handle-interrupt)
+  (push-interpreter-state *pc*)
+
+  (push (enter-fixnum *pending-interrupt*))
+  (push *cont*)
+  (push *val*)
+  (push (enter-fixnum *nargs*))
+  (push (enter-fixnum *enabled-interrupts*))
+  (set! *nargs* 5)
+
+  (set! *val* (vector-ref *interrupt-handlers* *pending-interrupt*))
+  (set! *pending-interrupt*  0)
+  (set! *enabled-interrupts* 0)  ;Disable all interrupts
+  (goto perform-application))
+
+; -*- Mode: Scheme; Syntax: Scheme; Package: S48; -*-
+
+; This is file prim.scm.
+
+;;;; Primitive procedures
+
+(define-macro (define-primitive opcode input-types action . returner-option)
+  (let* ((shorten (lambda (l1 l2) (map (lambda (x1 x2) x2 x1) l1 l2)))
+	 (places (reverse (shorten `(*val* *arg2* *arg3* *arg4*) input-types)))
+         (nargs (length input-types)))
+    `(define-opcode ,opcode
+       (lambda ()
+	 ,@(if (>= nargs 2) `((set! *arg2* (pop))) `())
+	 ,@(if (>= nargs 3) `((set! *arg3* (pop))) `())
+	 ,@(if (>= nargs 4) `((set! *arg4* (pop))) `())
+	 (if (and ,@(map (lambda (in place)
+			   `((input-type-predicate ,in) ,place))
+			 input-types
+			 places))
+	     ,(let ((yow `(,action
+			   ,@(map (lambda (in place)
+				    `((input-type-coercion ,in) ,place))
+				  input-types
+				  places))))
+		(if (null? returner-option)
+		    yow
+		    `(,(car returner-option) ,yow)))
+	     (goto wrong-type-argument))))))
+
+; Input checking and coercion
+
+(define (wrong-type-argument)
+  (raise exception/wrong-type-argument))
+
+(define (input-type pred coercer)  ;Alonzo wins
+  (lambda (f) (f pred coercer)))
+
+(define (input-type-predicate type) (type (lambda (x y) y x)))
+(define (input-type-coercion type)  (type (lambda (x y) x y)))
+
+(define any->     (input-type (lambda (x) x #t) (lambda (x) x)))
+(define fixnum->  (input-type fixnum? extract-fixnum))
+(define char->    (input-type char?   extract-char))
+(define string->  (input-type string? (lambda (x) x)))
+(define xstring-> (input-type string? extract-string))
+
+; Output coercion
+
+(define (return val)
+  (set! *val* val)
+  (goto interpret))
+
+(define ->any return)
+
+(define (->boolean x)
+  (return (enter-boolean x)))
+
+(define (->fixnum x)
+  (return (enter-fixnum x)))
+
+(define (->fixnum-carefully x)
+  (cond ((overflows? x)
+	 (raise exception/arithmetic-overflow))
+	(else
+	 (->fixnum x))))
+
+(define (->char x)
+  (return (enter-char x)))
+
+(define (->unspecified x)
+  x ;ignored
+  (return unspecified))
+
+
+; Scalar primitives
+
+(define-primitive op/eq?     (any-> any->) eq? ->boolean)
+(define-primitive op/fixnum? (any->) fixnum? ->boolean)
+
+(define-primitive op/+           (fixnum-> fixnum->) + ->fixnum-carefully)
+(define-primitive op/-           (fixnum-> fixnum->) - ->fixnum-carefully)
+(define-primitive op/*           (fixnum-> fixnum->) * ->fixnum-carefully)
+; Watch out for  (quotient most-negative-fixnum -1)
+(define-primitive op/quotient    (fixnum-> fixnum->) quotient ->fixnum-carefully)
+(define-primitive op/remainder   (fixnum-> fixnum->) remainder ->fixnum)
+(define-primitive op/=           (fixnum-> fixnum->) =   ->boolean)
+(define-primitive op/<           (fixnum-> fixnum->) <   ->boolean)
+(define-primitive op/char?       (any->) char? ->boolean)
+(define-primitive op/char=?      (char-> char->) char=? ->boolean)
+(define-primitive op/char<?      (char-> char->) char<? ->boolean)
+(define-primitive op/char->ascii (char->) char->ascii ->fixnum)
+
+; ASCII->CHAR ought to check that the input is in an appropriate
+; range, but doesn't.  Do we need a special exception type for this?
+; It's not exactly a type error.
+(define-primitive op/ascii->char (fixnum->) ascii->char ->char)
+
+; Stored object access primitives
+
+(define stob-> (input-type (lambda (x)
+                             (stob-of-type? x (next-byte)))
+                           (lambda (x) x)))
+
+(define-primitive op/stob-of-type? (any->)
+  (lambda (obj)
+    (stob-of-type? obj (next-byte)))
+  ->boolean)
+
+; D-vector = vector of descriptors.
+
+(define-primitive op/make-d-vector (fixnum-> any->)
+  (lambda (len init)
+    (cond ((and (>=& len 0)
+		(available? (addr1+ (cells->a-units len))))
+	   (set! *retrying-after-gc?* #f)
+	   (let* ((type (next-byte))
+		  (x (make-d-vector type len)))
+	     ;; Clear out storage
+	     (do ((i (-& len 1) (-& i 1)))
+		 ((<& i 0)
+		  (return x))
+	       (d-vector-set! x i init))))
+	  (else
+	   (set! *pc* (-& *pc* 1))	;Back up!
+	   (set! *finished* (label interpret))
+	   (goto collect-and-retry)))))
+
+; This is the only n-ary primitive.
+(define-primitive op/d-vector ()
+  (lambda ()
+    (let* ((type (next-byte))
+	   (len (next-byte)))
+      (let ((x (make-d-vector type len)))
+	(if (>& len 0)
+	    (do ((i (-& len 2) (-& i 1)))
+		((<& i 0)
+		 (d-vector-set! x (-& len 1) *val*))
+	      (d-vector-set! x i (pop))))
+	(return x)))))
+
+(define-primitive op/d-vector-ref
+  (stob-> fixnum->) 
+  (lambda (x index)
+    (cond ((valid-index? index (d-vector-length x))
+           (return (d-vector-ref x index)))
+          (else
+           (raise exception/index-out-of-range)))))
+
+(define-primitive op/d-vector-set!
+  (stob-> fixnum-> any->)
+  (lambda (x index val)
+    (cond ((valid-index? index (d-vector-length x))
+           (d-vector-set! x index val)
+           (return unspecified))
+          (else
+           (raise exception/index-out-of-range)))))
+
+(define-primitive op/d-vector-length (stob->) 
+  d-vector-length
+  ->fixnum)
+
+; B-vector primitives
+
+(define-primitive op/make-b-vector
+  (fixnum->) 
+  (lambda (len)
+    (cond ((and (>=& len 0)             ;Hack to avoid type checking
+                (available? (addr1+ (bytes->a-units len))))
+           (set! *retrying-after-gc?* #f)
+           (let* ((type (next-byte))
+                  (x (make-b-vector type len)))
+             ;; Clear out storage (not really necessary)
+             (do ((i (-& len 1) (-& i 1)))
+                 ((=& i 0)
+                  (return x))
+               (b-vector-set! x i 0))))
+          (else
+           (set! *pc* (-& *pc* 1))      ;Back up!
+           (set! *finished* (label interpret))
+           (goto collect-and-retry)))))
+
+(define-primitive op/b-vector-ref (stob-> fixnum->) 
+  (lambda (x index)
+    (cond ((valid-index? index (b-vector-length x))
+           (return (b-vector-ref x index)))
+          (else
+           (raise exception/index-out-of-range)))))
+
+(define-primitive op/b-vector-set! (stob-> fixnum-> fixnum->)
+  (lambda (x index val)
+    (cond ((valid-index? index (b-vector-length x))
+	   (b-vector-set! x index val)
+	   (return unspecified))
+	  (else
+	   (raise exception/index-out-of-range)))))
+
+(define-primitive op/b-vector-length (stob->) 
+  b-vector-length
+  ->fixnum)
+
+
+; Miscellaneous primitives
+
+(define-primitive op/suspend
+  (xstring->) 
+  (lambda (filename)
+    (set! *val* unspecified)
+    (save-registers *root*)
+    (set! *filename* filename)
+    (set! *finished* (label really-suspend))
+    (goto collect)))
+
+(define (really-suspend)
+  (set! *finished* (label return-from-suspend))
+  (goto write-image))
+
+(define (return-from-suspend)
+  (restore-registers *root*)
+  (goto interpret))
+
+; Unnecessary primitives
+;  (Need write-string)
+
+(define string=? stob-equal?)
+
+(define-primitive op/string=? (string-> string->) string=? ->boolean)
+
+; Special primitive called by the reader.
+; Primitive for the sake of speed.  Probably should be flushed.
+
+(define-primitive op/reverse-list->string
+  (any-> fixnum->) 
+  (lambda (l n)
+    (cond ((not (or (pair? l) (eq? l null)))
+           (goto wrong-type-argument))
+          ((available? (addr1+ (bytes->a-units n)))
+           (set! *retrying-after-gc?* #f)
+           (let ((obj (make-string n)))
+             (do ((l l (cdr l))
+                  (i (-& n 1) (-& i 1)))
+                 ((<& i 0) (return obj))
+               (string-set! obj i (extract-char (car l))))))
+          (else
+           (set! *pc* (-& *pc* 1))      ;Back up!
+           (set! *finished* (label interpret))
+           (goto collect-and-retry)))))
+
+; The hash function used here is to take the sum of the ascii values
+; of the characters in the string, modulo the symbol table size.
+;
+; This hash function was tested on 607 symbols from the
+; scheme-48 sources.  Whether or not the symbol table size (modulus)
+; was prime or not was found not to make much difference; in fact,
+; moduli of 256 and 512 worked out pretty well.  The standard
+; deviation for the length of the buckets was as follows:
+;      199           1.744
+;      256           1.695
+;      509           1.175
+;      512           1.202
+;      1021          0.828
+; Since taking a remainder mod 512 is much faster than taking one mod
+; 509, 512 is the choice here for the table size.
+;
+; This hash function was also compared against some others, e.g.
+; adding in the length as well, and taking only the odd or only the
+; even characters.  It fared about the same as adding the length, and
+; much better than examining only every other character.
+;
+; Perhaps a hash function that is sensitive to the positions of the
+; characters should be tried?  (Consider CADDR, CDADR, CDDAR.)
+;
+; Of course, if we switched to rehashing, a prime modulus would be
+; important.
+
+(define log-table-size 9)
+(define table-size (adjoin-bits 1 0 log-table-size))
+
+(define (string-hash s)
+  (let ((n (string-length s)))
+    (do ((i 0 (+& i 1))
+         (h 0 (+& h (char->ascii (string-ref s i)))))
+        ((>=& i n) h))))
+
+(define-primitive op/string-hash (string->) string-hash ->fixnum)
+
+; Symbol table and environment lookup
+
+(define (table-searcher hash match? ret make-new)
+  ;; In FX terms, this procedure has type
+  ;;          (poly (t1 t2 t3)
+  ;;            (proc ((proc (t1) int)     ;hash
+  ;;                   (proc (t1 t2) bool) ;match?
+  ;;                   (proc (t2) t3)      ;ret
+  ;;                   (proc (t1) t2))     ;make-new
+  ;;              (proc (t1 (vector-of (list-of t2)))
+  ;;                t3)))
+  ;; For the symbol table, t1 = string, t2 = t3 = symbol.
+  (lambda (obj table)
+    (let* ((index (low-bits (hash obj) log-table-size))
+           (bucket (vector-ref table index)))
+      (let loop ((b bucket))
+        (cond ((eq? b null)
+               (let ((new (make-new obj)))
+                 (vector-set! table index (cons new bucket))
+                 (ret new)))
+              ((match? obj (car b))
+               (ret (car b)))
+              (else
+               (loop (cdr b))))))))
+
+(define intern
+  (table-searcher string-hash
+                  (lambda (string sym)
+                    (string=? string (symbol->string sym)))
+                  (lambda (sym) sym)    ;return the symbol
+                  make-symbol))
+
+(define-primitive op/intern (any-> any->) intern ->any)
+
+(define xlookup
+  (table-searcher (lambda (sym) (string-hash (symbol->string sym)))
+                  (lambda (sym cell)
+                    (eq? sym (cell-name cell)))
+                  (lambda (cell) cell)  ;return the cell
+                  (lambda (sym) (make-cell unbound-marker sym))))
+
+(define (lookup env sym) (xlookup sym env))
+
+(define-primitive op/lookup (any-> any->) lookup ->any)
+
+; Maybe later add table-ref and table-set! as primitives...
+
+; -*- Mode: Scheme; Syntax: Scheme; Package: S48; -*-
+
+; This is file vmio.scm.
+
+;;;; I/O primitives
+
+; Port fields:
+;  port-mode         1 = input
+;		     2 = output
+;		     (this field doesn't ever change)
+;  port-index        index into open-ports vector
+;		     0 = initial input port
+;		     1 = initial output port
+;		     -1 = not open
+;  peeked-char       char or #f
+;  port-id           for debugging
+;
+; Questions:
+;  What to do if an error occurs?
+;  How to deal with transcript-on and transcript-off ?
+;  How to deal with uninterrubtibly opening a port and pushing it onto
+;    an outstanding-ports list?
+
+; *open-ports* is a vector of descriptors for open ports.
+; *open-%ports is a vector of open "%ports".  A "%port" corresponds to
+; a non-simulated Scheme port, or to a C FILE * object.
+
+(define number-of-ports 100)
+
+(define *open-%ports* (unassigned))
+(define *open-ports*  (unassigned))
+
+(define (extract-port port)
+  (let ((index (extract-fixnum (port-index port))))
+    (if (>=& index 0)
+	(%vector-ref *open-%ports* index)
+	#f)))
+
+(define (initialize-i/o-system)
+  (set! *open-%ports* (%make-vector number-of-ports #f))
+  (set! *open-ports*  (%make-vector number-of-ports f))
+  (%vector-set! *open-%ports* 0 (current-input-port))
+  (%vector-set! *open-%ports* 1 (current-output-port)))
+
+; Auxiliaries for I/O primitives
+
+(define (input-port? obj)
+  (and (port? obj)
+       (=& (extract-fixnum (port-mode obj)) 1)))
+
+(define (output-port? obj)
+  (and (port? obj)
+       (=& (extract-fixnum (port-mode obj)) 2)))
+
+(define (open? port)
+  (>=& (extract-fixnum (port-index port)) 0))
+
+(define port->        (input-type port?        (lambda (x) x)))
+(define input-port->  (input-type input-port?  (lambda (x) x)))
+(define output-port-> (input-type output-port? (lambda (x) x)))
+
+(define (enter-char-or-eof c)
+  (if (eof-object? c)
+      eof-object
+      (enter-char c)))
+
+; I/O primitives
+
+(define-primitive op/input-port? (any->) input-port? ->boolean)
+(define-primitive op/output-port? (any->) output-port? ->boolean)
+
+(define-primitive op/open-port (string->)
+  (lambda (filename)
+    (let ((index (%vector-posq #f *open-%ports*)))
+      (cond (index
+	     (set! *retrying-after-gc?* #f)
+	     (let* ((mode (next-byte))
+		    (%port (case mode
+			     ((1) (open-input-file (extract-string filename)))
+			     ((2) (open-output-file (extract-string filename)))
+			     (else #f))))
+	       (if %port
+		   (let ((port (make-port (enter-fixnum mode)
+					  (enter-fixnum index)
+					  f
+					  filename)))
+		     (%vector-set! *open-%ports* index %port)
+		     (%vector-set! *open-ports*  index port)
+		     (return port))
+		   (raise exception/file-not-found))))
+	    (else
+	     (set! *pc* (-& *pc* 1))	;Back up!
+	     (set! *finished* (label interpret))
+	     (goto collect-and-retry))))))
+
+(define (close-port port)
+  (if (open? port)
+      (let ((%port (extract-port port))
+	    (index (port-index port)))
+	(case (port-mode port)
+	  ((1) (close-input-port %port))
+	  ((2) (close-output-port %port)))
+	(set-port-index! port -1)
+	(%vector-set! *open-%ports* index #f)
+	(%vector-set! *open-ports*  index f))))
+
+(define-primitive op/close-port (port->)
+  close-port
+  ->unspecified)
+
+(define-primitive op/read-char (input-port->)
+  (lambda (port)
+    (if (open? port)
+	(let ((c (peeked-char port)))
+	  (return (cond ((false? c)
+			 (enter-char-or-eof
+			   (read-char (extract-port port))))
+			(else
+			 (set-peeked-char! port f)
+			 c))))
+	(raise exception/operation-on-closed-port))))
+
+(define-primitive op/peek-char (input-port->)
+  (lambda (port)
+    (if (open? port)
+	(let ((c (peeked-char port)))
+	  (return (cond ((false? c)
+			 (let ((c (enter-char-or-eof
+				    (read-char (extract-port port)))))
+			   (set-peeked-char! port c)
+			   c))
+			(else c))))
+	(raise exception/operation-on-closed-port))))
+
+(define-primitive op/write-char (char-> output-port->)
+  (lambda (c port)
+    (if (open? port)
+	(begin (write-char c (extract-port port))
+	       (return unspecified))
+	(raise exception/operation-on-closed-port))))
+
+(define-primitive op/write-string (xstring-> output-port->)
+  (lambda (s port)
+    (if (open? port)
+	(begin (write-string s (extract-port port))
+	       (return unspecified))
+	(raise exception/operation-on-closed-port))))
+
+; The following are auxiliaries for GC and SUSPEND.
+
+(define (close-port-noisily port)
+  (close-port port)
+  (write-string "Port closed: ")
+  (write-string (extract-string (port-id port)))
+  (newline))
+
+(define (map-over-open-ports! proc)  ;For suspend and GC
+  (do ((i 0 (+& i 1)))
+      ((=& i number-of-ports) #f)
+    (let ((port (%vector-ref *open-ports* i)))
+      (if (not (false? port))
+	  ;; Update pointer after GC
+	  (%vector-set! *open-ports* i (proc port))))))
+
+; -*- Mode: Scheme; Syntax: Scheme; Package: S48; -*-
+
+; This is file resume.scm.
+; This is really too tiny to be its own file.  Figure out where to put this.
+
+;;;; Top level entry point
+
+; RESUME is the main entry point to the entire system, and the only
+; routine that calls RUN-MACHINE other than for bootstrapping and
+; debugging.
+
+(define (resume filename)
+  (set! *filename* filename)
+  (set! *finished* return-from-suspend)
+  (run-machine read-image))
+
+(define (initialize-memory)  ;Do this before booting or resuming
+  (newline)
+  (write-string "Initializing...")
+  ;; Is 100K cells big enough to do cold load & resume?
+  (if (<& (-& *memory-end* *memory-begin*) (cells->a-units 100000))
+      (create-memory (cells->a-units 100000) quiescent)))
+
+
+
+
+
+
+
+; -*- Mode: Scheme; Syntax: Scheme; Package: S48; -*-
+
+; This is file ids.scm.
+
+;;;; Interpreter data structures
+
+; BITS-PER-BYTE
+;  The compiler needs to know how many bits there are in a byte,
+;  since it constructs code vectors (which are vectors of bytes).
+
+(define bits-used-per-byte 7)  ;must be <= bits-per-byte
+
+(define byte-limit (expt 2 bits-used-per-byte))
+
+; Templates
+
+(define (template? obj)    ;Heuristic only, for error checking
+  (and (vector? obj)
+       (>=& (vector-length obj) 2)
+       (code-vector? (template-code obj))))
+
+(define (template-code tem) (vector-ref tem 0))
+(define (template-name tem) (vector-ref tem 1))
+
+
+; Continuations
+
+(define (make-continuation p t e c s) (vector p t e c s))
+(define (continuation-pc c)       (vector-ref c 0))
+(define (continuation-template c) (vector-ref c 1))
+(define (continuation-env c)	  (vector-ref c 2))
+(define (continuation-cont c)	  (vector-ref c 3))
+(define (continuation-stack c)	  (vector-ref c 4))
+
+; -*- Mode: Scheme; Syntax: Scheme; Package: S48; -*-
+
+; This is file memory.scm.
+
+;;;; Memory access
+
+; Memory abstraction for simulating the S48 heap inside of Scheme.
+
+; Fundamental parameters
+
+(define bits-per-byte 7)  ;or 8 or 9, choose one
+(define bytes-per-cell 4)
+(define bits-per-cell (* bits-per-byte bytes-per-cell))
+
+(define (bytes->cells bytes)
+  (quotient& (+& bytes (-& bytes-per-cell 1))
+	     bytes-per-cell))
+
+(define (cells->bytes cells)
+  (*& cells bytes-per-cell))
+
+; Addresses
+;
+;  An "addressing unit" is the smallest quantum of storage addressed by
+;  an address on a particular machine.  In the simulation, which has a
+;  big array with one cell per entry, there is one addressing unit per
+;  cell.  Similarly on a DEC-20, 3600, or other word-addressed
+;  architecture.  On the VAX or 68000, though, the addressing unit is
+;  the byte, of which there are 4 to a cell.
+;
+;  Note: by a "byte" is meant enough bits to store either a character or
+;  a bytecode.  That probably means either 7, 8, or 9 bits.
+;
+;  Each address may have some number of "unused bits" at its low end.
+;  When memory is a Scheme vector, there are none, but when it's VAX or
+;  68000 memory, there are two.
+
+(define unused-field-width 0)  ;2
+(define addressing-units-per-cell (expt 2 unused-field-width))
+
+(define (cells->a-units cells)
+  (adjoin-bits cells 0 unused-field-width))
+
+(define (a-units->cells cells)
+  (high-bits cells unused-field-width))
+
+(define (bytes->a-units byte-count)
+  (cells->a-units (bytes->cells byte-count)))
+
+; The following operations work on addresses (which just happen to be
+; implemented as fixnums).
+
+(define addr+ +&)
+(define addr- -&)
+(define addr/ quotient&) ;used by gc
+(define addr<  <& )
+(define addr<= <=&)
+(define addr>  >& )
+(define addr>= >=&)
+
+(define (addr1+ x)
+  (addr+ x addressing-units-per-cell))
+
+
+; Memory access
+
+(define *memory* (unassigned))
+(define *memory-begin* 0)
+(define *memory-end* 0)
+
+(define (create-memory size initial-value)
+  (set! *memory* (%make-vector size initial-value))
+  (set! *memory-end* size))
+
+(define (fetch address)
+  (%vector-ref *memory* address))
+
+(define (store! address value)
+  (%vector-set! *memory* address value))
+
+; -*- Mode: Scheme; Syntax: Scheme; Package: S48; -*-
+
+; This is file data.scm.
+
+;;;; Data representations
+
+; This implementation of the data representations is particularly
+; tuned for byte-addressable machines with 4 bytes per word.
+; Good representations for other kinds of machines would necessarily
+; look quite different; e.g. on a word-addressed machine you might
+; want to put tag bits in the high end of a word, or even go to some
+; king of BIBOP system.
+
+
+; Descriptors
+;  A descriptor describes a Scheme object.
+;  A descriptor is represented as an integer whose low two bits are
+;  tag bits.  The high bits contain information whose format and
+;  meaning are dependent on the tag.
+
+(define tag-field-width 2)
+(define data-field-width (-& bits-per-cell tag-field-width))
+
+(define (make-descriptor tag data)
+  (adjoin-bits data tag tag-field-width))
+
+(define (descriptor-tag descriptor)
+  (low-bits descriptor tag-field-width))
+
+(define (descriptor-data descriptor)
+  (high-bits descriptor tag-field-width))
+
+(define eq? =&)
+
+; The four tags are: fixnum, immediate (character, boolean, etc.),
+; header (gives the type and size of a stored object), and stored
+; (pointer into memory).
+; The header and immediate tags could be multiplexed, thus freeing up
+; one of the 4 type codes for some other purpose, but the
+; implementation is simpler if they're not.
+
+(define-enumeration tag
+  (fixnum
+   immediate
+   header
+   stob))
+
+;; (assert (>= (expt 2 tag-field-width)
+;;	       (%vector-length tag)))
+
+(define (fixnum? descriptor)
+  (=& (descriptor-tag descriptor) tag/fixnum))
+
+(define (immediate? descriptor)
+  (=& (descriptor-tag descriptor) tag/immediate))
+
+(define (header? descriptor)
+  (=& (descriptor-tag descriptor) tag/header))
+
+(define (stob? descriptor)
+  (=& (descriptor-tag descriptor) tag/stob))
+
+; Fixnums
+
+(define bits-per-target-fixnum (- (* bits-per-cell) tag-field-width)) ;26 or 30
+(define    least-target-fixnum (- 0 (expt 2 bits-per-target-fixnum)))
+(define greatest-target-fixnum (- (expt 2 bits-per-target-fixnum) 1))
+
+(define (overflows? n)
+  (or (< n least-target-fixnum)
+      (> n greatest-target-fixnum)))
+
+(define (enter-fixnum n)
+  (assert (not (overflows? n)))
+  (make-descriptor tag/fixnum n))
+
+(define (extract-fixnum p)
+  (descriptor-data (enforce fixnum? p)))
+
+; Immediates
+;  The number 8 is chosen to streamline 8-bit-byte-oriented implementations.
+
+(define immediate-type-field-width
+  (-& 8 tag-field-width))
+
+(define (make-immediate type info)
+  (make-descriptor tag/immediate (adjoin-bits info
+					      type
+					      immediate-type-field-width)))
+
+(define (immediate-type imm)
+  (low-bits (descriptor-data (enforce immediate? imm))
+	    immediate-type-field-width))
+
+(define (immediate-info imm)
+  (high-bits (descriptor-data (enforce immediate? imm))
+	     immediate-type-field-width))
+
+(define-enumeration imm
+  (false      ; #f ()
+   true       ; #t
+   char
+   unspecified
+   undefined
+   eof))
+
+;; (assert (>= (expt 2 immediate-type-field-width)
+;;	       (%vector-length imm)))
+
+(define (immediate-predicate type)
+  (lambda (descriptor)
+    ;; Check low 8 bits...
+    (and (immediate? descriptor)
+	 (=& (immediate-type descriptor) type))))
+
+(define false?     (immediate-predicate imm/false))
+(define char?      (immediate-predicate imm/char))
+(define undefined? (immediate-predicate imm/undefined))
+
+(define t             (make-immediate imm/true 0))
+(define f             (make-immediate imm/false 0))
+(define null          (make-immediate imm/false 1))
+(define eof-object    (make-immediate imm/eof 0))
+(define unspecified   (make-immediate imm/unspecified 0))
+(define quiescent     (make-immediate imm/undefined 0))
+(define unbound-marker    (make-immediate imm/undefined 1))
+(define unassigned-marker (make-immediate imm/undefined 2))
+
+(define (enter-boolean b)
+  (if b t f))
+
+; Characters
+
+(define (enter-char c)
+  (make-immediate imm/char (char->ascii c)))
+
+(define (extract-char d)
+  (ascii->char (immediate-info (enforce char? d))))
+
+(define (char=? x y) (=& (enforce char? x) (enforce char? y)))
+(define (char<? x y) (<& (enforce char? x) (enforce char? y)))
+
+; Headers
+;  The possible values for the type field are defined elsewhere.
+;  *** Eventually allow for an immutability bit, to prevent people
+;      from clobbering string print names and quoted structure.
+
+(define header-type-field-width (-& immediate-type-field-width 1))
+
+(define (make-header type length-in-bytes)
+  (make-descriptor tag/header (adjoin-bits length-in-bytes
+					   type
+					   header-type-field-width)))
+
+(define (header-type h)
+  (low-bits (descriptor-data (enforce header? h))
+	    header-type-field-width))
+
+(define (header-length-in-bytes h)
+  (high-bits (descriptor-data (enforce header? h))
+	     header-type-field-width))
+
+(define (header-length-in-cells header)
+  (bytes->cells (header-length-in-bytes header)))
+
+(define (header-a-units h)   ;Used by GC to find end of any object
+  (bytes->a-units (header-length-in-bytes h)))
+
+; Stored objects
+;  The data field of a descriptor for a stored object contains the
+;  cell number of the first cell after the object's header cell.
+
+(define (make-stob-descriptor addr)
+  (make-descriptor tag/stob (a-units->cells addr)))
+
+(define (address-after-header stob)
+  (descriptor-data (enforce stob? stob)))
+
+; Accessing memory via stob descriptors
+
+(define (stob-ref stob index)
+  (fetch (addr+ (address-after-header stob) (cells->a-units index))))
+
+(define (stob-set! stob index value)
+  (store! (addr+ (address-after-header stob) (cells->a-units index))
+	  value))
+
+(define (stob-header stob)
+  (stob-ref stob -1))
+
+(define (stob-header-set! stob header)
+  (stob-set! stob -1 header))
+
+(define (stob-type obj)
+  (header-type (stob-header obj)))
+
+(define (stob-of-type? obj type)
+  (and (stob? obj)
+       (=& (stob-type obj) type)))
+
+(define (stob-equal? stob1 stob2)    ;CMPC3 or "strcmp"
+  (let ((z1 (stob-header stob1))
+        (z2 (stob-header stob2)))
+    (and (=& z1 z2)
+         (let ((z (header-length-in-cells z1)))
+           (let loop ((i 0))
+             (cond ((>=& i z) #t)
+		   ((=& (stob-ref stob1 i)
+		        (stob-ref stob2 i))
+		    (loop (+& i 1)))
+		   (else #f)))))))
+
+(define (valid-index? index len)
+  (and (>=& index 0) (<& index len)))
+
+; Allocation
+;  *hp* is the heap pointer and *limit* is the limit beyond which no
+;  storage should be allocated.  Both of these are addresses (not
+;  descriptors).
+
+(define *hp* 0)
+(define *limit* 0)
+
+(define (available? cells)
+  (addr< (addr+ *hp* (cells->a-units cells)) *limit*))
+
+(define (make-stob type len)   ;len is in bytes
+  (assert (available? (+ (bytes->cells len) 1)))
+  (store! *hp* (make-header type len))  ;(store-next!)
+  (set! *hp* (addr1+ *hp*))
+  (let ((new (make-stob-descriptor *hp*)))
+    (set! *hp* (addr+ *hp* (bytes->a-units len)))
+    new))
+
+; D-vectors (vectors of descriptors)
+
+(define (d-vector-header? h)
+  (<& (header-type h) least-b-vector-type))
+
+(define (d-vector? obj)
+  (and (stob? obj)
+       (<& (header-type (stob-header obj)) least-b-vector-type)))
+
+(define (make-d-vector type len)
+  (make-stob type (cells->bytes len)))
+
+; The type in these routines is used only for internal error checking.
+
+(define (d-vector-length x)
+  (header-length-in-cells (stob-header (enforce d-vector? x))))
+
+(define (d-vector-ref x index)
+  (assert (valid-index? index (d-vector-length x)))
+  (stob-ref x index))
+
+(define (d-vector-set! x index val)
+  (assert (valid-index? index (d-vector-length x)))
+  (stob-set! x index val))
+
+; B-vector = vector of bytes.
+
+(define little-endian? #t)
+
+(define (b-vector-header? h)
+  (and (header? h)
+       (>=& (header-type h) least-b-vector-type)))
+
+(define (b-vector? obj)
+  (and (stob? obj)
+       (>=& (header-type (stob-header obj))
+	    least-b-vector-type)))
+
+(define make-b-vector make-stob)
+
+(define (b-vector-length x)
+  (assert (b-vector? x))
+  (header-length-in-bytes (stob-header (enforce b-vector? x))))
+
+(define (b-vector-ref x i)
+  (assert (valid-index? i (b-vector-length x)))
+  (let* ((word (stob-ref x (quotient& i bytes-per-cell)))
+	 (residue (remainder& i bytes-per-cell))
+	 (right (*& bits-per-byte	;Position of LSB
+		    (if little-endian?
+			residue
+			(-& (-& bytes-per-cell 1) residue)))))
+    (low-bits (high-bits word right)
+	      bits-per-byte)))
+
+(define (b-vector-set! x i val)
+  (assert (valid-index? i (b-vector-length x)))
+  (let* ((word-index (quotient& i bytes-per-cell))
+	 (word (stob-ref x word-index))
+	 (residue (remainder& i bytes-per-cell))
+	 (right (*& bits-per-byte	;Position of LSB
+		    (if little-endian?
+			residue
+			(-& (-& bytes-per-cell 1) residue))))
+	 (left (+& right bits-per-byte)));Position past MSB
+    (stob-set! x
+	       word-index
+	       ;;  ...aaa b ccc...  ->  ...aaa v ccc...
+	       (adjoin-bits (high-bits word left);= ...aaa
+			    (adjoin-bits val
+					 (low-bits word right);= ccc...
+					 right)
+			    left))))
+
+; -*- Mode: Scheme; Syntax: Scheme; Package: S48; -*-
+
+; This is file gc.scm.
+
+;;;; Garbage collector
+
+(define *root* (enter-fixnum 0))	;What the GC roots from
+(define *finished* (unassigned))	;Where the GC returns to
+(define *filename* "s48.image")
+
+(define *newspace-begin* 0)
+(define *newspace-end* 0)
+(define *oldspace-begin* 0)
+(define *oldspace-end* 0)
+
+; MARGIN is the amount of space that can be safely allocated
+; before checking to see whether space is available.
+
+(define *margin* (cells->a-units 258))
+
+
+(define (initialize-heap)
+  ;; Divide all of memory into two parts.
+  (let ((semisize (addr/ (addr- *memory-end* *memory-begin*) 2)))
+    (set! *newspace-begin* *memory-begin*)
+    (set! *newspace-end* (addr+ *memory-begin* semisize))
+    (set! *oldspace-begin* *newspace-end*)
+    (set! *oldspace-end* (addr+ *oldspace-begin* semisize))
+    (reset-heap-pointer)
+    (set! *root* quiescent)))
+
+(define (reset-heap-pointer)
+  (set! *hp* (addr1+ *newspace-begin*))
+  (set! *limit* (addr- *newspace-end* *margin*)))
+
+(define (in-oldspace? descriptor)
+  (and (stob? descriptor)
+       (let ((a (address-after-header descriptor)))
+         (and (addr>= a *oldspace-begin*)
+              (addr< a *oldspace-end*)))))
+
+; The following is used in exactly one place, namely the main dispatch
+; of the evaluator.  That's the only place from which the garbage
+; collector can be called.
+
+(define (time-to-collect?)
+  (addr>= *hp* *limit*))
+
+; Collector
+
+(define *scan* 0)
+
+(define (store-next! descriptor)
+  (store! *hp* descriptor)
+  (set! *hp* (addr1+ *hp*)))
+
+(define (scan-next)
+  (let ((x (fetch *scan*)))
+    (set! *scan* (addr1+ *scan*))
+    x))
+
+;  Roots from *root*.
+
+(define (collect)
+  ;; Flip
+  (let ((b *newspace-begin*))
+    (set! *newspace-begin* *oldspace-begin*)
+    (set! *oldspace-begin* b))
+  (let ((e *newspace-end*))
+    (set! *newspace-end* *oldspace-end*)
+    (set! *oldspace-end* e))
+  (set! *limit* (addr- *newspace-end* *margin*))
+  (set! *hp* *newspace-begin*)
+  ;; Root
+  (store-next! *root*)
+  (set! *scan* *newspace-begin*)
+  (goto scan))
+
+(define (scan)
+  (cond ((addr< *scan* *hp*)
+	 (let ((thing (fetch *scan*)))
+	   (cond ((b-vector-header? thing)
+		  (set! *scan*
+			(addr+ (addr1+ *scan*) (header-a-units thing)))
+		  (goto scan))
+		 ((in-oldspace? thing)
+		  (let ((h (stob-header thing)))
+		    (cond ((stob? h)		;***Broken heart
+			   ;; (assert (in-newspace? h))
+			   (store! *scan* h)
+			   (set! *scan* (addr1+ *scan*))
+			   (goto scan))
+			  (else
+			   ;; Copy an object
+			   (store-next! h)
+			   (let ((new (make-stob-descriptor *hp*)))
+			     (stob-header-set! thing new) ;***Break heart
+			     (store! *scan* new)
+			     (set! *scan* (addr1+ *scan*)))
+			   (let ((new-hp (addr+ *hp* (header-a-units h))))
+			     (do ((o (address-after-header thing)
+				     (addr1+ o)))
+				 ((addr>= *hp* new-hp)
+				  (goto scan))
+			       (let ((p (fetch o)))
+				 (assert (or (b-vector-header? h)
+					     (not (stob? p))
+					     (in-oldspace? p)))
+				 (store-next! p))))))))
+		 (else
+		  (set! *scan* (addr1+ *scan*))
+		  (goto scan)))))
+	((addr>= *hp* *limit*)
+	 (error "out of memory"))
+	(else
+	 (set! *root* (fetch *newspace-begin*))
+	 (map-over-open-ports!
+	   (lambda (port)
+	     (if (stob? (stob-header port))
+		 (stob-header port)
+		 (begin (close-port-noisily port)
+			f))))
+	 (computed-goto *finished*))))
+
+
+;;;; Write-image and read-image
+
+(define level 5)
+
+(define (write-image)
+  (call-with-output-file *filename*
+    (lambda (port)
+      (map-over-open-ports!
+	(lambda (port)
+	  ;; Don't let the restored image get confused by open ports.
+	  (close-port-noisily port)
+	  f))
+      (write-descriptor (if little-endian? 1 2) port)
+      (write-descriptor bits-per-byte    port)
+      (write-descriptor level            port)
+      (write-descriptor *newspace-begin* port)
+      (write-descriptor *hp*             port)
+      (write-descriptor *root*           port)
+      (set! *scan* *newspace-begin*)
+      (let loop ()
+        (cond ((addr>= *scan* *hp*)
+	       (computed-goto *finished*))
+	      (else
+	       (let ((d (scan-next)))
+		 (write-descriptor d port)
+		 (cond ;;((eq? d the-primitive-header)
+			;; Write out symbolic name of label.
+			;;(write (label->name (fixnum->label (scan-next))) port))
+		       ((b-vector-header? d)
+			(let ((z (addr+ *scan* (header-a-units d))))
+			  (do ()
+			      ((addr>= *scan* z))
+			    (write-descriptor (scan-next) port))))))))))))
+
+(define (write-descriptor thing port)
+  (write thing port)
+  (newline port))
+
+(define (read-image)
+  (call-with-input-file *filename*
+    (lambda (port)
+      (let* ((old-l-e?  (case (read-descriptor port)
+			  ((1) #t)
+			  ((2) #f)
+			  (else (error "bogus image file"))))
+	     (old-level (read-descriptor port))
+	     (old-bits-per-byte (read-descriptor port))
+	     (old-bytes-per-cell (read-descriptor port))
+	     (old-begin (read-descriptor port))
+	     (old-hp    (read-descriptor port))
+	     (old-root  (read-descriptor port)))
+	(if (not (=& old-level level))
+	    (error "format of image is incompatible with this version of system"
+		   old-level level))
+	(if (not (=& old-bits-per-byte bits-per-byte))
+	    (error "incompatible bits-per-byte"
+		   old-bits-per-byte bits-per-byte))
+	(if (not (=& old-bytes-per-cell bytes-per-cell))
+	    (error "incompatible bytes-per-cell"
+		   old-bytes-per-cell bytes-per-cell))
+
+	(initialize-memory)
+	(initialize-heap)
+
+	(let* ((delta (-& *newspace-begin* old-begin))
+	       (new-hp (+& old-hp delta))
+	       (new-limit (-& *newspace-end* *margin*)))
+	  (cond ((addr>= new-hp new-limit)
+		 (error "heap not big enough to restore this image"
+			new-hp new-limit))
+		(else
+		 (initialize-i/o-system)  ;clear out port vectors
+		 (set! *root* (adjust old-root delta))
+		 (let loop ()
+		   (cond ((addr>= *hp* new-hp)
+			  (computed-goto *finished*))
+			 (else
+			  (let ((d (adjust (read-descriptor port) delta)))
+			    (store-next! d)
+			    (cond ;;((eq? d the-primitive-header)
+				   ;; Read symbolic label name.
+				   ;;(store-next!
+				   ;;  (label->fixnum (name->label (read port)))))
+				  ((b-vector-header? d)
+				   (let ((z (addr+ *hp* (header-a-units d))))
+				     (do ()
+					 ((addr>= *hp* z))
+				       (let ((thing (read-descriptor port)))
+					 (store-next!
+					   (maybe-reverse-bytes thing old-l-e?)))))))
+			    (loop))))))))))))
+
+(define (adjust descriptor delta)
+  (cond ((stob? descriptor)
+         (make-stob-descriptor
+	   (addr+ (address-after-header descriptor) delta)))
+        (else descriptor)))
+
+(define (maybe-reverse-bytes thing l-e?)
+  ;; 1 = little, 2 = big
+  (if (if l-e? (not little-endian?) little-endian?)
+      ;; This loop hasn't been tested, so I don't expect it to work.
+      (do ((x thing (high-bits x bits-per-byte))
+	   (y 0 (adjoin-bits (low-bits x bits-per-byte) y bits-per-byte))
+	   (n bytes-per-cell (- n 1)))
+	  ((= n 0) y))
+      thing))
+
+(define (read-descriptor port)
+  (let ((thing (read port)))
+    (if (eof-object? thing)
+	(error "premature end of file!" *scan*)
+	thing)))
+
+; -*- Mode: Scheme; Syntax: Scheme; -*-
+
+; This is file stob.scm.
+
+;;;; Stored object types
+
+; The STOB enumerated type is known by both the VM and the compiler.
+
+(define-enumeration stob
+  (;; D-vector types (traced by GC)
+   pair
+   symbol
+   vector
+   closure
+   cell
+   port
+   ratio         ; pad this out so that there are eight d-vector types
+   d-unused-1
+
+   ;; B-vector types (not traced by GC)
+   string        ; = least b-vector type
+   code-vector
+   double        ;double precision floating point
+   bignum
+   ))
+
+(define least-b-vector-type stob/string)
+
+;; (assert (>= (expt 2 header-type-field-width)
+;;	       (%vector-length stob)))
+
+; -*- Mode: Scheme; Syntax: Scheme; Package: S48; -*-
+
+; This is file struct.scm.
+
+;;;; Structure definitions
+
+(define-macro (d-vector type . args)
+  `(let ((-v- (make-d-vector ,type ,(length args))))
+     ,@(do ((a args (cdr a))
+	    (i 0 (+ i 1))
+	    (z '() (cons `(d-vector-set! -v- ,i ,(car a)) z)))
+	   ((null? a) (reverse z)))
+     -v-))
+
+(define-macro (define-primitive-structure-type type make pred . body)
+  (let* ((shorten (lambda (l1 l2) (map (lambda (x1 x2) x2 x1) l1 l2)))
+	 (vars (shorten `(a b c d e f g) body)))
+    `(begin (define (,make ,@vars)
+	      (d-vector ,type ,@vars))
+	    (define ,pred (stob-predicate ,type))
+	    ,@(do ((s body (cdr s))
+		   (i 0 (+ i 1))
+		   (d '() (let* ((slot (car s))
+				 (d (cons `(define (,(car slot) x)
+					     (d-vector-ref x ,i))
+					  d)))
+			    (if (null? (cdr slot))
+				d
+				(cons `(define (,(cadr slot) x val)
+					 (d-vector-set! x ,i val))
+				      d)))))
+		  ((null? s) (reverse d))))))
+
+(define (stob-predicate type)
+  (lambda (obj) (stob-of-type? obj type)))
+
+; Synchronize this with cprim.scm.
+
+(define-primitive-structure-type stob/pair cons pair?
+  (car set-car!)
+  (cdr set-cdr!))
+
+(define-primitive-structure-type stob/symbol make-symbol symbol?
+  (symbol->string))
+
+(define-primitive-structure-type stob/closure make-closure closure?
+  (closure-template)
+  (closure-env))
+
+(define-primitive-structure-type stob/cell make-cell cell?
+  (contents set-contents!)
+  (cell-name))
+
+(define-primitive-structure-type stob/port make-port port?
+  (port-mode)
+  (port-index set-port-index!)
+  (peeked-char set-peeked-char!)
+  (port-id))
+
+(define (make-vector len) (make-d-vector stob/vector len))
+(define-macro (vector . args) `(d-vector stob/vector ,@args))
+(define vector?       (stob-predicate stob/vector))
+(define vector-length d-vector-length)
+(define vector-ref    d-vector-ref)
+(define vector-set!   d-vector-set!)
+
+(define (vector-fill! v val)  ;used by initialize-transporter
+  (do ((i 0 (+& i 1)))
+      ((=& i (vector-length v)) v)
+    (vector-set! v i val)))
+
+(define (make-string len) (make-b-vector stob/string len))
+(define string?       (stob-predicate  stob/string))
+(define string-length b-vector-length)
+(define string-ref    (lambda (s i) (ascii->char (b-vector-ref s i))))
+(define string-set!   (lambda (s i c) (b-vector-set! s i (char->ascii c))))
+
+(define (make-code-vector len) (make-b-vector stob/code-vector len))
+(define code-vector?	    (stob-predicate  stob/code-vector))
+(define code-vector-length b-vector-length)
+(define code-vector-ref    b-vector-ref)
+(define code-vector-set!   b-vector-set!)
+
+; Used by OPEN, WRITE-STRING, SUSPEND
+
+(define (extract-string string)
+  (let ((z (string-length string)))
+    (let ((v (%make-string z)))
+      (do ((i 0 (+& i 1)))
+          ((>=& i z) v)
+        (%string-set! v i (string-ref string i))))))
+
+; -*- Mode: Scheme; Syntax: Scheme; Package: Scheme; -*-
+
+; This is file boot.scm.
+
+;;;; Bootstrapping
+
+; To start up a bare system, do (boot).
+; Then you can load the world by doing (cold-load).
+; Suspend an image by saying something like
+;  (run! '(dump "AI: X48; S48 SUS")).
+
+(define (boot)
+  (clear-registers)         ;purge garbage from registers
+  (clear-interrupt-registers)
+  (initialize-memory)	    ;create memory
+  (initialize-i/o-system)   ;clear out port vectors
+  (initialize-heap)         ;set up GC registers
+  (initialize-machine)      ;set up exception vector, etc.
+  (initialize-transporter)  ;create symbol table & system env
+  (boot-i/o-system)	    ;create initial ports
+  (establish-initial-definitions)
+  'booted)
+
+(define (cold-load)
+  (for-each (lambda (f)
+	      (boot-load (string-append "AI: X48; " (symbol->string f) " >")))
+	    '(enum
+	      arch
+	      basic
+	      ids
+	      io
+	      sys
+	      comp
+	      cprim
+	      user))
+  'done)
+
+(define (establish-initial-definitions)
+  (boot-define 'unspecified s48:unspecified)    ;Needed by COND
+  (boot-define 'eof-object  s48:eof-object)
+  (boot-define 'exception-handlers *exception-handlers*)
+  (boot-define 'interrupt-handlers *interrupt-handlers*)
+  (boot-define 'the-symbol-table *symbol-table*)
+  (boot-define 'system-environment *system-environment*)
+  'done)
+
+(define (boot-define name val)  ;must return a descriptor...
+  (let ((name (enter name)))
+    (s48:set-contents! (s48:lookup *system-environment* name) val)
+    name))
+
+(define (boot-i/o-system)
+  (boot-define 'initial-input-port
+	       (s48:make-port (enter 1) (enter 0) (enter #f) (enter "initial input port")))
+  (boot-define 'initial-output-port
+	       (s48:make-port (enter 2) (enter 1) (enter #f) (enter "initial output port"))))
+
+; Misc. bootstrap and debugging stuff
+
+; The storage manager can run independently of the interpreter if
+; desired.  The following definitions for invoking the evaluator
+; aren't necessary if you're only going to use the storage manager.
+
+(define (boot-load filename)
+  (call-with-input-file
+    filename
+    (lambda (port)
+      (newline)
+      (display "Loading ")
+      (write filename)
+      (let loop ()
+        (let ((form (read port)))
+	  (cond ((eof-object? form) 'done)
+		(else
+		 (run! form)
+		 (write-char #\.)
+		 (loop))))))))
+
+(define (run exp)
+  (clear-registers)
+  (extract (run! exp)))
+
+(define (run! form)
+  (parse-top-level-form
+     form
+     really-run!
+     (lambda (var exp)
+       (boot-define var
+	  (if (and (pair? exp) (eq? (car exp) 'lambda))
+	      (s48:make-closure (enter (compile-lambda-top exp system-environment var))
+				(enter #f))
+	      (really-run! exp))))))
+
+(define (really-run! exp)
+  (set! *val* (s48:make-closure (enter (compile-top `(halt ,exp) system-environment))
+				(enter #f)))
+  (set! *nargs* 0)
+  (run-machine perform-application)
+  *val*)
+
+; -*- Mode: Scheme; Syntax: Scheme; Package: Scheme; -*-
+
+; This is file transport.scm.
+
+;;;; Transporters to and from simulated heap
+
+(define (initialize-transporter)
+  (set! *symbol-table*	     (s48:make-vector table-size))
+  (s48:vector-fill! *symbol-table* s48:null)
+  (set! *system-environment* (s48:make-vector table-size))
+  (s48:vector-fill! *system-environment* s48:null))
+
+; Scheme value -> simulated value
+;  This is a dangerous thing to call.  It's essential that there be
+;  enough space for this routine to allocate whatever storage it
+;  needs, without any need for GC, since there isn't any
+;  opportunity to do one.
+
+(define (enter obj)
+  (cond ((integer? obj) (enter-fixnum obj))
+        ((char? obj) (enter-char obj))
+        ;; The relative ordering of the next two clauses is
+	;; important when we boot the system from a scheme that
+	;; doesn't distinguish #f from ().
+        ((eq? obj '()) s48:null)
+        ((eq? obj #f) s48:f)
+        ((eq? obj #t) s48:t)
+        ((pair? obj)
+         (s48:cons (enter (car obj)) (enter (cdr obj))))
+        ((symbol? obj)
+	 (s48:intern (enter (symbol->string obj)) *symbol-table*))
+        ((code-vector? obj)  ;should precede string case
+	 (let ((v (s48:make-code-vector (code-vector-length obj))))
+	   (do ((i 0 (+ i 1)))
+	       ((>= i (code-vector-length obj)) v)
+	     (s48:code-vector-set! v i (code-vector-ref obj i)))))
+        ((string? obj)
+	 (let ((v (s48:make-string (string-length obj))))
+	   (do ((i 0 (+ i 1)))
+	       ((>= i (string-length obj)) v)
+	     (s48:string-set! v i (string-ref obj i)))))
+        ((cell? obj)
+         (s48:lookup *system-environment* (enter (cell-name obj))))
+        ;; Vector case must be last, for simulation
+	((vector? obj)
+	 (let ((v (s48:make-vector (vector-length obj))))
+	   (do ((i 0 (+ i 1)))
+	       ((>= i (vector-length obj)) v)
+	     (s48:vector-set! v i (enter (vector-ref obj i))))))
+        (else
+         (error "unenterable object" obj))))
+
+; Simulated value -> scheme value
+
+(define (extract obj)
+  (sub-extract obj '()))
+
+(define (sub-extract obj a)
+  (if (memv obj a)   ; a = ancestors
+      (begin (newline)
+	     (display "Cycle encountered: ")
+	     (write a)
+	     '<cycle>)
+      (let ((a (cons obj a)))
+	(cond ((s48:fixnum? obj) (extract-fixnum obj))
+	      ((s48:char? obj) (extract-char obj))
+	      ((s48:eq? obj s48:null) '())
+	      ((s48:eq? obj s48:f) #f)
+	      ((s48:eq? obj s48:t) #t)
+	      ((s48:eq? obj s48:unspecified) '<unspecified>)
+	      ((s48:pair? obj)
+	       (cons (sub-extract (s48:car obj) a) (sub-extract (s48:cdr obj) a)))
+	      ((s48:vector? obj)
+	       (let ((z (s48:vector-length obj)))
+		 (let ((v (make-vector z)))
+		   (do ((i 0 (+ i 1)))
+		       ((>= i z) v)
+		     (vector-set! v i (sub-extract (s48:vector-ref obj i) a))))))
+	      ((s48:symbol? obj)
+	       (string->symbol (sub-extract (s48:symbol->string obj) a)))
+	      ((s48:cell? obj)
+	       (lookup system-environment (sub-extract (s48:cell-name obj) a)))
+	      ((s48:closure? obj)
+	       (make-closure (sub-extract (s48:closure-template obj) a)
+			     (sub-extract (s48:closure-env obj) a)))
+	      ((s48:string? obj)
+	       (extract-string obj))
+	      ((s48:code-vector? obj)
+	       (let ((z (s48:code-vector-length obj)))
+		 (let ((v (make-code-vector z)))
+		   (do ((i 0 (+ i 1)))
+		       ((>= i z) v)
+		     (code-vector-set! v i (s48:code-vector-ref obj i))))))
+	      (else `(<random> ,obj))))))
+
+; -*- Mode: Scheme; Syntax: Scheme; Package: S48; -*-
+
+; This is file run.scm.
+
+;;;; Control primitives
+
+; Driver loop
+
+(define *halt* (unassigned))
+
+(define (run-machine start-tag)
+  (call-with-current-continuation
+      (lambda (halt)
+	(set! *halt* halt)
+	(driver-loop start-tag))))
+
+(define (driver-loop start-tag)
+  (let loop ((tag start-tag))
+    (loop (tag))))
+
+(define (halt-machine)
+  (*halt* #f))
+
+(define (goto tag)
+  ;(tag)   ; If tail-recursion works
+  tag	   ; If tail-recursion doesn't work
+  )
+
+; Assigned goto (e.g. for return addresses)
+
+(define (label tag)
+  tag)     ; Declaration for (set! *finished* ...)
+
+(define computed-goto goto)
+
+; Dispatch
+
+(define make-dispatch-table %make-vector)
+
+(define define-dispatch! %vector-set!)
+
+(define (dispatch table tag)
+  ((%vector-ref table tag)))
+
+; -*- Mode: Scheme; Syntax: Scheme; Package: Scheme; -*-
+
+; This is file pfeatures.scm.
+
+; Version of Scheme-48 FEATURES module for use with PSEUDOSCHEME.
+; Keep in sync with file FEATURES.SCM.
+
+; Miscellaneous features for Pseudoscheme
+; (intended for bootstrapping Scheme-48)
+
+(lisp:import '(pseudoscheme::define[subst]
+	       pseudoscheme::concatenate-symbol
+	       lisp:the))
+
+; Fluids (used by block compiler...)
+
+(define (make-fluid top-level-value)
+  (let ((f (lisp:gensym "FLUID")))
+    (lisp:set f top-level-value)
+    f))
+
+(define (fluid f)
+  (lisp:symbol-value f))
+
+(define (set-fluid! f val)
+  (lisp:set f val))
+
+(define (let-fluid f val thunk)
+  (lisp:progv (list f) (list val) (thunk)))
+
+; Misc.
+
+(define unassigned-marker (list '<unassigned>))
+(define unbound-marker    (list '<unbound>))
+
+(define (undefined? x)
+  (or (eq? x unassigned-marker) (eq? x unbound-marker)))
+
+(define (unassigned) unassigned-marker)
+(define (unbound)    unbound-marker)
+
+(define-macro (enforce pred val)
+  `(let ((-val- ,val))
+     (if (,pred -val-)
+	 -val-
+	 (error "enforce failed" ',pred -val-))))
+
+(define-macro (assert truth)
+  `(if (not ,truth) (assertion-failed)))
+
+(define (assertion-failed)
+  (error "assertion failed"))
+
+(lisp:defparameter concatenate-symbol #'concatenate-symbol)
+
+(define (vector-posq thing v)
+  (let loop ((i 0))
+    (cond ((>= i (vector-length v)) nil)
+	  ((eq? thing (vector-ref v i)) i)
+	  (else (loop (+ i 1))))))
+
+; These don't really belong here.
+
+(define[subst] %make-string make-string)  ;Used by extract-string
+(define[subst] %string-set! string-set!)
+(define[subst] %make-vector make-vector)  ;Used by i/o system
+(define[subst] %vector-ref  vector-ref)
+(define[subst] %vector-set! vector-set!)
+(define[subst] %vector-length vector-length)
+(define[subst] %vector-posq vector-posq)
+
+; 28-bit integer arithmetic primitives
+
+(lisp:deftype 28bit () `(lisp:signed-byte 28))
+
+(define[subst] (+& x y)
+  (the (28bit) (+ (the (28bit) x) (the (28bit) y))))
+
+(define[subst] (-& x y)
+  (the (28bit) (- (the (28bit) x) (the (28bit) y))))
+
+(define[subst] (*& x y)
+  (the (28bit) (* (the (28bit) x) (the (28bit) y))))
+
+(define[subst] (=& x y)
+  (= (the (28bit) x) (the (28bit) y)))
+
+(define[subst] (<& x y)
+  (< (the (28bit) x) (the (28bit) y)))
+
+(define[subst] (<=& x y)
+  (<= (the (28bit) x) (the (28bit) y)))
+
+(define[subst] (>& x y)
+  (> (the (28bit) x) (the (28bit) y)))
+
+(define[subst] (>=& x y)
+  (>= (the (28bit) x) (the (28bit) y)))
+
+(define[subst] (quotient& x y)
+  (the (28bit) (quotient (the (28bit) x) (the (28bit) y))))
+
+(define[subst] (remainder& x y)
+  (the (28bit) (remainder (the (28bit) x) (the (28bit) y))))
+
+(define[subst] (adjoin-bits high low k)
+  (+& (lisp:ash (the (28bit) high) k) low))
+
+(define[subst] (high-bits n k)
+  (the (28bit) (lisp:ash (the (28bit) n) (- k))))
+
+(define[subst] (low-bits n k)
+  (the (28bit)
+       (lisp:logand n (the (28bit)
+			   (- (the (28bit) (lisp:ash 1 k)) 1)))))
+
+; String operations
+
+(define[subst] (string-posq c s)
+  (lisp:position c (the lisp:simple-string s)))
+
+; Tables
+
+(define[subst] (make-table)
+  (lisp:values (lisp:make-hash-table)))
+
+(define[subst] (table-set! table key val)
+  (lisp:setf (lisp:gethash key table) val))
+
+(define[subst] (table-ref table key)
+  (lisp:gethash key table #f))
+
+; Code vectors
+
+(lisp:deftype code-vector () `(lisp:vector (lisp:unsigned-byte 8)))
+
+(define[subst] (code-vector? obj)
+  (lisp:typep obj '(code-vector)))
+
+(define (make-code-vector len)
+  (lisp:make-array len :element-type '(lisp:unsigned-byte 8)))
+
+(define[subst] (code-vector-ref bv k)
+  (lisp:aref (the (code-vector) bv)
+	     k))
+
+(define[subst] (code-vector-set! bv k val)
+  (lisp:setf (lisp:aref (the (code-vector) bv)
+			k)
+	     val))
+
+(define[subst] (code-vector-length bv)
+  (lisp:length (the (code-vector) bv)))
+
+; Cells
+
+(lisp:defstruct (cell (:predicate cell?)
+		      (:constructor make-cell (contents cell-name))
+		      (:conc-name #f)
+		      (:copier #f))
+  contents
+  cell-name)
+
+(lisp:defparameter make-cell #'make-cell)
+(lisp:defparameter cell?     #'cell?)
+(lisp:defparameter contents  #'contents)
+(lisp:defparameter cell-name #'cell-name)
+
+(define[subst] (set-contents! cell val)
+  (lisp:setf (contents cell) val))
+
+; Closures
+
+(lisp:defstruct (closure (:predicate closure?)
+			 (:constructor make-closure (template env)))
+  template env)
+
+(lisp:defparameter make-closure	    #'make-closure)
+(lisp:defparameter closure?	    #'closure?)
+(lisp:defparameter closure-template #'closure-template)
+(lisp:defparameter closure-env	    #'closure-env)
+
+; Environments
+
+(define (make-empty-environment) (make-table))
+(define system-environment (make-empty-environment))
+
+(define (lookup env sym)
+  (or (table-ref env sym)
+      (let ((cell (make-cell (unbound) sym)))
+	(table-set! env sym cell)
+	cell)))
+
+; I/O
+
+(lisp:defun peek-char (lisp:&optional (port lisp:*standard-input*))
+  (lisp:peek-char #f port))
+
+(lisp:defparameter peek-char #'peek-char)
+
+(define write-string display)
+
+; -*- Mode: Scheme; Syntax: Scheme; Package: Scheme; -*-
+
+; This is file ascii.scm.
+
+;;;; ASCII character conversion
+
+(define ascii-chars
+  (string-append "........."
+		 (list->string '(#\tab #\newline #\. #\page))
+		 "..................."
+		 " !\"#$%&'()*+,-./0123456789:;<=>?"
+		 "@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_"
+		 "`abcdefghijklmnopqrstuvwxyz{|}~"))
+
+(define native-chars
+  (let ((t (make-table)))
+    (let loop ((a (string->list ascii-chars))
+	       (i 0)
+	       (least    #f)
+	       (greatest #f))
+      (cond ((null? a)
+	     (let ((v (make-vector (+ (- greatest least) 1))))
+	       (do ((i least (+ i 1)))
+		   ((> i greatest) (cons least v))
+		 (vector-set! v (- i least) (table-ref t i)))))
+	    (else
+	     (let ((n (char->integer (car a))))
+	       (table-set! t n i)
+	       (loop (cdr a)
+		     (+ i 1)
+		     (if least    (min least    n) n)
+		     (if greatest (max greatest n) n))))))))
+
+(define (char->ascii char)
+  (vector-ref (cdr native-chars)
+	      (- (char->integer char) (car native-chars))))
+
+(define[subst] (ascii->char n)
+  (string-ref ascii-chars n))
+
+
+; -*- Mode: Scheme; Syntax: Scheme; Package: Scheme  -*-
+
+; This is file enum.scm.
+
+;;;; Enumerated types
+
+; The expression
+;   (define-enumeration <e-type> (<tag>*))
+; will (a) define the variable <e-type> to name an enumerated type,
+; and (b) define <e-type>/<tag1> ... <e-type>/<tagn> to be small
+; integers.
+
+(define-macro (define-enumeration name cases)
+  `(begin (define ,name ',(list->vector cases))
+	  ,@(do ((c cases (cdr c))
+		 (i 0 (+ i 1))
+		 (d '() (cons `(define ,(concatenate-symbol name '/ (car c))
+				 ,i)
+			      d)))
+		((null? c) (reverse d)))))
+
+; Break the enumerated types abstraction.
+;   (enumerand->name <integer> <e-type>) => a symbol
+;   (name->enumerand <symbol>  <e-type>) => an integer
+
+(define (enumerand->name e e-type)
+  (vector-ref e-type e))
+
+(define (name->enumerand e e-type)
+  (or (vector-posq e e-type)
+      (error "unknown enumerand name" e)))

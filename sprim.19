@@ -1,0 +1,99 @@
+; -*- Mode: Scheme; Syntax: Scheme; Package: SCHEME  -*-
+
+; This is file sprim.scm.
+
+;;;; Stub system primitives
+
+(define (native name args cenv cont state)
+  (simply (emit op/native
+		(length args)
+		(get-literal state (eval name user-initial-environment)))
+	  args cenv cont state))
+
+(define (simply seg args cenv cont state)
+  (sequentially (if (null? args)
+                    empty-segment
+                    (push-all-but-last args cenv state))
+                seg
+                (dispose-of-val cont)))
+
+; Synchronize this list with ARCH.SCM and VMPRIM.SCM
+
+(for-each (lambda (z)
+	    (dp (car z) (cadr z) #f native))
+	  '((eq?	       2)
+	    (fixnum?           1)
+	    (+                 2)
+	    (-                 2)
+	    (*                 2)
+	    (=                 2)
+	    (<                 2)
+	    (quotient          2)
+	    (remainder         2)
+	    (char?             1)
+	    (char->ascii       1)
+	    (ascii->char       1)
+	    (char=?            2)
+	    (char<?            2)
+	    (unassigned        0)
+	    ;(suspend           1)
+	    (set-enabled-interrupts! 1)
+	    (open-input-file   1)
+	    (open-output-file  1)
+	    (close-input-port  1)
+	    (close-output-port 1)
+	    (eof-object?       1)  ;!
+	    (read-char         1)
+	    (peek-char         1)
+	    (write-char        2)
+	    (write-string      2)
+	    (string=?          2)
+	    (intern	       2)
+	    (lookup	       2)
+	    (reverse-list->string 2)
+	    (symbol->string    1)
+	    (symbol?	       1)
+	    (make-vector       2)
+	    (vector?	       1)
+	    (vector-length     1)
+	    (vector-ref	       2)
+	    (vector-set!       3)
+	    (make-string       1)
+	    (string?	       1)
+	    (string-length     1)
+	    (string-ref	       2)
+	    (string-set!       3)
+	    (make-code-vector  1)
+	    (code-vector?      1)
+	    (code-vector-length 1)
+	    (code-vector-ref   2)
+	    (code-vector-set!  3)))
+
+(define (*define-primitive-structure-type make pred slots)
+  (dp make (length slots) #f native)
+  (dp pred 1		  #f native)
+  (for-each (lambda (slot)
+	      (dp (car slot) 1 #f native)
+	      (if (not (null? (cdr slot)))
+		  (dp (cadr slot) 2 #f native)))
+	    slots))
+
+(define-macro (define-primitive-structure-type type make pred . body)
+  type ;ignored
+  `(*define-primitive-structure-type ',make ',pred ',body))
+
+; Synchronize these with struct.scm and cprim.scm.
+
+(define-primitive-structure-type stob/pair cons pair?
+  (car set-car!)
+  (cdr set-cdr!))
+
+; Don't define a symbol constructor!
+
+(define-primitive-structure-type stob/closure make-closure closure?
+  (closure-template)
+  (closure-env))
+
+(define-primitive-structure-type stob/cell make-cell cell?
+  (contents set-contents!)
+  (cell-name))

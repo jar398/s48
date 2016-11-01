@@ -1,0 +1,38 @@
+; -*- Mode: Scheme; Syntax: Scheme; Package: bare-machine; -*-
+
+;;;; ASCII character conversion
+
+(define ascii-chars
+  (string-append "........."
+		 (list->string '(#\tab #\newline #\. #\page))
+		 "..................."
+		 " !\"#$%&'()*+,-./0123456789:;<=>?"
+		 "@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_"
+		 "`abcdefghijklmnopqrstuvwxyz{|}~"))
+
+(define native-chars
+  (let ((t (make-table)))
+    (let loop ((a (string->list ascii-chars))
+	       (i 0)
+	       (least    #f)
+	       (greatest #f))
+      (cond ((null? a)
+	     (let ((v (make-vector (+ (- greatest least) 1))))
+	       (do ((i least (+ i 1)))
+		   ((> i greatest) (cons least v))
+		 (vector-set! v (- i least) (table-ref t i)))))
+	    (else
+	     (let ((n (char->integer (car a))))
+	       (table-set! t n i)
+	       (loop (cdr a)
+		     (+ i 1)
+		     (if least    (min least    n) n)
+		     (if greatest (max greatest n) n))))))))
+
+(define (char->ascii char)
+  (vector-ref (cdr native-chars)
+	      (- (char->integer char) (car native-chars))))
+
+(define[subst] (ascii->char n)
+  (string-ref ascii-chars n))
+

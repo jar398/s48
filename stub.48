@@ -1,0 +1,81 @@
+; -*- Mode: Scheme; Syntax: Scheme; Package: Scheme; -*-
+
+; This is file stub.scm.
+
+;;;; Data manipulation stub
+
+; ----- DATA -----
+
+(define (enter-fixnum x)   x)
+(define (extract-fixnum x) x)
+(define (enter-boolean x)  x)
+(define (enter-char x)     x)
+(define (extract-char x)   x)
+
+(define false (if (eq? #f '()) (vector '<false>) #f))   ;????
+(define (false? x) (or (eq? x false) (eq? x '())))
+(define true #t)
+(define null '())
+(define unspecified  (list '<unspecified>))
+
+(define unassigned-marker (list '<unassigned>))
+(define unbound-marker    (list '<unbound>))
+
+(define (undefined? x)
+  (or (eq? x unassigned-marker)
+      (eq? x unbound-marker)))
+
+(define fixnum? integer?)
+
+(define (available? n) n #t)   ;Used by make-rest-list code
+
+; ----- STRUCT -----
+
+(define (extract-string x) x)
+
+(define (intern string symbol-table)
+  symbol-table ;ignored
+  (string->symbol string))
+
+(define (reverse-list->string l len)  ;can we flush this?
+  (let ((str (make-string len)))
+    (do ((i (- len 1) (- i 1))
+	 (l l (cdr l)))
+	((< i 0) str)
+      (string-set! str i (car l)))))
+
+(define (make-port mode index id)
+  mode id ;ignored
+  (case index
+    ((0) (current-input-port))
+    ((1) (current-output-port))
+    ;; Fix later
+    (else (error "bogus argument to make-port" index))))
+
+; ----- GC -----
+
+(define *finished* (unassigned))
+(define *root* (unassigned))
+(define *retrying-after-gc?* #f)
+
+(define (collect) (computed-goto *finished*))
+(define (collect-and-retry) (computed-goto *finished*))
+
+(define (initialize-heap) 'done)
+
+(define (time-to-collect?) #f)
+
+; ----- TRANSPORT stub -----
+
+(define *system-environment* (unassigned))
+(define *symbol-table* '<the-symbol-table>)
+(define (initialize-transporter)
+  (set! *system-environment* (make-empty-environment))
+  'done)
+
+(define (enter x) x)
+(define (extract x) x)
+
+; ----- RESUME stub -----
+
+(define (initialize-memory) 'ok)

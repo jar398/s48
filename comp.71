@@ -1,0 +1,330 @@
+; -*- Mode: Scheme; Syntax: Scheme; Package: comp; -*-
+
+; This is file comp.scm.
+
+;;;; The compiler
+
+; Opimizations are marked with +++, and may be flushed.
+
+; COMPILE-TOP
+
+(define (compile-top l-exp env name)
+  (compile-lambda l-exp (environment->cenv env) name))
+
+(define (compile-lambda exp cenv name)
+  (compiling
+   (lambda (state)
+     (let* ((args (cadr exp))
+	    (body (cddr exp))
+	    (nargs (number-of-required-args args)))
+       (sequentially
+	(if (n-ary? args)
+	    (sequentially
+	     (if (pair? args)
+		 (emit op/check-nargs>= nargs)
+		 empty-segment)		;+++
+	     (emit op/make-rest-list nargs)
+	     (emit op/make-env (+ nargs 1)))
+	    (sequentially
+	     (emit op/check-nargs= nargs)
+	     (if (null? args)
+		 empty-segment		;+++
+		 (emit op/make-env nargs))))
+	(compile (process-body body)
+		 (if (null? args)
+		     cenv		;+++
+		     (bind-vars (normalize-formals args) cenv))
+		 '(return)
+		 state))))
+   name))
+
+(define (number-of-required-args formals)
+  (do ((l formals (cdr l))
+       (i 0 (+ i 1)))
+      ((not (pair? l)) i)))
+
+(define (n-ary? formals)
+  (not (null? (if (pair? formals)
+		  (cdr (last-pair formals))
+		  formals))))
+
+(define (normalize-formals formals)
+  (cond ((null? formals) '())
+	((pair? formals) (cons (car formals) (normalize-formals (cdr formals))))
+	(else (list formals))))
+
+(define (reverse-list->vector l i) i
+  (list->vector (reverse l)))
+
+(define (compile exp cenv cont state)
+  (cond ((symbol? exp)
+	 (compile-variable exp cenv cont state))
+	((or (number? exp) (char? exp) (string? exp) (boolean? exp))
+	 (compile-literal exp cont state))
+	((not (pair? exp))
+	 (error "invalid expression" exp))
+	((eq? (car exp) system-ref-marker)
+	 (compile (cadr exp)
+		  (environment->cenv system-environment)
+		  cont
+		  state))
+	((not (symbol? (car exp)))
+	 (compile-unknown-call exp cenv cont state))
+	(else
+	 (let ((probe (table-ref compilators (car exp))))
+	   (if probe
+	       (probe exp cenv cont state)
+	       (let ((probe (get-macro-expander (car exp))))
+		 (if probe
+		     (compile (probe exp) cenv cont state)
+		     (compile-var-call exp cenv cont state))))))))
+
+(define (compile-variable exp cenv cont state)
+  (sequentially
+   (let ((info (clookup cenv exp)))
+     (case (car info)
+       ((local)
+	(emit op/local (cadr info) (caddr info)))
+       ((global primitive)
+	(emit op/global (get-literal state (cadr info))))))
+   (dispose-of-val cont)))
+
+(define compilators (make-table))
+
+(define (define-compilator name proc)
+  (table-set! compilators name proc))
+
+(define-compilator 'quote
+  (lambda (exp cenv cont state)
+    cenv ;ignored
+    (compile-literal (cadr exp) cont state)))
+
+(define-compilator 'lambda
+  (lambda (exp cenv cont state)
+    (let ((name (if (eq? (car cont) 'set!) (cadr cont) nil)))
+      (sequentially
+       (emit op/make-closure
+	     (get-literal state (compile-lambda exp cenv name)))
+       (dispose-of-val cont)))))
+
+(define-compilator 'set!
+  (lambda (exp cenv cont state)
+    (let ((var (cadr exp))
+	  (val (caddr exp)))
+      (sequentially
+       (compile val cenv `(set! ,var) state)
+       (let ((info (clookup cenv var)))
+	 (case (car info)
+	   ((local)
+	    (emit op/set-local! (cadr info) (caddr info)))
+	   ((global)
+	    (emit op/set-global! (get-literal state (cadr info))))
+	   ((primitive)
+	    (warn "assigning a primitive" var)
+	    (emit op/set-global! (get-literal state (cadr info))))))
+       (dispose-of-val cont)))))
+
+(define-compilator 'if
+  (lambda (exp cenv cont state)
+    (let* ((alt-segment (compile (cadddr exp) cenv cont state))
+	   (con-segment
+	    (sequentially
+	     (compile (caddr exp) cenv cont state)
+	     ;; If (segment-size alt-segment) is too big, we ought to
+	     ;; shrink it somehow (e.g. by eta-converting: e =>
+	     ;; ((lambda () e))).  All three of the EMIT-OFFSET's have
+	     ;; this problem.  Deal with this later...
+	     (if (eq? (car cont) 'return)  ;Eliminate dead code.
+		 empty-segment		;+++
+		 (emit-offset op/jump (segment-size alt-segment))))))
+      (sequentially
+       (compile (cadr exp) cenv '(val) state)
+       (emit-offset op/jump-if-false (segment-size con-segment))
+       con-segment
+       alt-segment))))
+
+(define-compilator 'begin
+  (lambda (exp cenv cont state)
+    (compile-begin (cdr exp) cenv cont state)))
+
+(define (compile-literal obj cont state)
+  (sequentially
+   (emit op/literal (get-literal state obj))
+   (dispose-of-val cont)))
+
+(define (compile-begin exp-list cenv cont state)
+  (cond ((null? (cdr exp-list))
+	 (compile (car exp-list) cenv cont state))
+	(else
+	 (sequentially
+	  (compile (car exp-list) cenv '(val) state)
+	  (compile-begin (cdr exp-list) cenv cont state)))))
+
+(define (compile-var-call exp cenv cont state)
+  (let ((info (clookup cenv (car exp))))
+    (case (car info)
+      ((primitive)
+       (compile-primitive-call (caddr info) (cdr exp) cenv cont state))
+      (else
+       (compile-unknown-call exp cenv cont state)))))
+
+; Compile a call to an unknown procedure
+
+(define (compile-unknown-call exp cenv cont state)
+  (maybe-push-continuation (sequentially 
+			    (push-all (cdr exp) cenv state)
+			    (compile (car exp) cenv '(val) state)
+			    (emit op/call (length (cdr exp))))
+			   cont))
+
+(define (maybe-push-continuation code cont)
+  (if (eq? (car cont) 'return)
+      code
+      (sequentially (emit-offset op/make-cont (segment-size code))
+		    code)))
+
+(define (push-all exp-list cenv state)
+  (if (null? exp-list)
+      empty-segment
+      ;; Sort of a kludge.  Push all but last, then push last.
+      (sequentially (push-all-but-last exp-list cenv state)
+		    (emit op/push))))
+
+(define (push-all-but-last exp-list cenv state)
+  (let loop ((l exp-list)
+	     (code empty-segment))
+    (if (null? (cdr l))
+	(sequentially code
+		      (compile (car l) cenv '(val) state))
+	(loop (cdr l)
+	      (sequentially
+	         code
+		 (compile (car l) cenv '(val) state)
+		 (emit op/push))))))
+
+(define (dispose-of-val cont)
+  (case (car cont)
+    ((return) (emit op/return))
+    (else empty-segment)))
+
+; CLOOKUP returns one of
+;  (LOCAL back over)
+;  (GLOBAL cell)
+;  (PRIMITIVE cell primitive)
+
+(define (clookup cenv var)
+  (cenv var 0))
+
+(define (environment->cenv env)
+  (let ((cenv (lambda (var back)
+		back			;ignored
+		(list 'global (lookup env var)))))
+    (if (eq? env system-environment)
+	(add-usual-integrations cenv)
+	cenv)))
+
+(define (add-usual-integrations cenv)
+  (lambda (var back)
+    back ;ignored
+    (let ((info (clookup cenv var))
+	  (probe (table-ref primitives var)))
+      (if probe
+	  (list 'primitive (cadr info) probe)
+	  info))))
+
+; Local environment management
+
+(define (bind-vars vars cenv)
+  (lambda (var back)
+    (let loop ((rib vars) (over 1))
+      (cond ((null? rib)
+	     (cenv var (+ back 1)))  ;Not here, try outer env.
+	    ((eq? var (car rib))
+	     (list 'local back over))
+	    (else (loop (cdr rib) (+ over 1)))))))
+
+(define (compiling proc name)
+  ;; Has type  (proc ((proc (state) segment)) template)
+  (let* ((state (make-state))
+	 (segment (proc state)))
+    (make-template segment state name)))
+
+; Literal management
+
+(define (make-template segment state name)
+  (list->vector (cons (segment->code-vector segment)
+		      (cons name 
+			    (reverse (state-literals state))))))
+
+(define (make-state) (list '() 2))
+(define state-literals       car)
+(define state-literals-index cadr)
+(define (set-state-literals! state val)       (set-car!      state  val))
+(define (set-state-literals-index! state val) (set-car! (cdr state) val))
+
+(define (get-literal state thing)
+  ;; Potential optimization: eliminate duplicate entries.
+  (let ((index (state-literals-index state)))
+    (if (>= index byte-limit)
+	(error "code too complicated for this system"
+	       (state-literals state)))
+    (set-state-literals! state (cons thing (state-literals state)))
+    (set-state-literals-index! state (+ index 1))
+    index))
+
+; Code emission utilities
+
+(define (sequentially . segments)
+  (make-segment (lambda (cv pc)
+		  (let loop ((pc pc) (s segments))
+		    (if (null? s)
+			pc
+			(loop (emit-segment! cv pc (car s)) (cdr s)))))
+		(let loop ((size 0) (s segments))
+		  (if (null? s)
+		      size
+		      (loop (+ size (segment-size (car s))) (cdr s))))))
+
+(define (emit opcode . operands)
+  (for-each (lambda (byte)
+	      (if (>= byte byte-limit)
+		  (error "byte too big (probably due to complicated code)"
+			 opcode operands)))
+	    operands)
+  (make-segment
+    (lambda (cv pc)
+      (do ((l operands (cdr l))
+	   (pc (emit-byte! cv pc opcode) (emit-byte! cv pc (car l))))
+	  ((null? l) pc)))
+    (+ 1 (length operands))))
+
+(define (emit-offset opcode offset)
+  (emit opcode offset))
+
+(define (emit-byte! cv pc byte)
+  (code-vector-set! cv pc byte)
+  (+ pc 1))
+
+(define make-segment cons)
+(define segment-size cdr)
+(define (emit-segment! cv pc segment)
+  ((car segment) cv pc))
+
+(define empty-segment (sequentially))
+
+(define (segment->code-vector segment)
+  (let ((cv (make-code-vector (segment-size segment))))
+    (emit-segment! cv 0 segment)
+    cv))
+
+; Print a warning message
+
+(define (warn msg . things)
+  (newline)
+  (display "** Warning: ")
+  (display msg)
+  (let ((o (current-output-port)))
+    (for-each (lambda (thing)
+		(write-char #\space o)
+		(write thing o))
+	      things)))

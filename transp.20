@@ -1,0 +1,140 @@
+; -*- Mode: Scheme; Syntax: Scheme; Package: Scheme; -*-
+
+; This is file transport.scm.
+
+;;;; Transporters to and from simulated heap.
+
+(define (boot-define name val)  ;RUN relies on this returning a descriptor
+  (let ((name (enter name)))
+    (data.set-contents! (data.lookup (get-system-environment) name) val)
+    name))
+
+(define becomes-eof-when-transported (list 'becomes-eof-when-transported))
+
+; Scheme value -> simulated value
+;  This is a dangerous thing to call.  It's essential that there be
+;  enough space for this routine to allocate whatever storage it
+;  needs, without any need for GC, since there isn't any
+;  opportunity to do one.
+
+(define (enter obj)
+  (cond ((integer? obj) (data.enter-fixnum obj))
+        ((char? obj) (data.enter-char obj))
+        ;; The relative ordering of the next two clauses is
+	;; important when we boot the system from a scheme that
+	;; doesn't distinguish #f from ().
+        ((eq? obj '()) data.null)
+        ((eq? obj #f) data.false)
+        ((eq? obj #t) data.true)
+	((eq? obj becomes-eof-when-transported) data.eof-object)
+        ((pair? obj)
+         (data.cons (enter (car obj)) (enter (cdr obj))))
+        ((symbol? obj)
+	 (data.intern (enter (symbol->string obj)) (get-symbol-table)))
+        ((code-vector? obj)  ;should precede string case
+	 (let ((v (data.make-code-vector (code-vector-length obj))))
+	   (do ((i 0 (+ i 1)))
+	       ((>= i (code-vector-length obj)) v)
+	     (data.code-vector-set! v i (code-vector-ref obj i)))))
+        ((string? obj)
+	 (let ((v (data.make-string (string-length obj))))
+	   (do ((i 0 (+ i 1)))
+	       ((>= i (string-length obj)) v)
+	     (data.string-set! v i (string-ref obj i)))))
+        ((cell? obj)
+         (data.lookup (get-system-environment)
+		      (enter (cell-name obj))))
+        ;; Vector case must be last, for simulation
+	((vector? obj)
+	 (let ((v (data.make-vector (vector-length obj))))
+	   (do ((i 0 (+ i 1)))
+	       ((>= i (vector-length obj)) v)
+	     (data.vector-set! v i (enter (vector-ref obj i))))))
+        (else
+         (error "unenterable object" obj))))
+
+; Simulated value -> scheme value
+
+(define (extract obj)
+  (sub-extract obj '()))
+
+(define (sub-extract obj a)
+  (if (memv obj a)   ; a = ancestors
+      (begin (newline)
+	     (display "Cycle encountered: ")
+	     (write a)
+	     '<cycle>)
+      (let ((a (cons obj a)))
+	(cond ((data.fixnum? obj) (data.extract-fixnum obj))
+	      ((data.char? obj) (data.extract-char obj))
+	      ((data.eq? obj data.null) '())
+	      ((data.eq? obj data.false) #f)
+	      ((data.eq? obj data.true) #t)
+	      ((data.eq? obj data.unspecified) '<unspecified>)
+	      ((data.pair? obj)
+	       (cons (sub-extract (data.car obj) a) (sub-extract (data.cdr obj) a)))
+	      ((data.vector? obj)
+	       (let ((z (data.vector-length obj)))
+		 (let ((v (make-vector z)))
+		   (do ((i 0 (+ i 1)))
+		       ((>= i z) v)
+		     (vector-set! v i (sub-extract (data.vector-ref obj i) a))))))
+	      ((data.symbol? obj)
+	       (string->symbol (data.extract-string (data.symbol->string obj))))
+	      ((data.cell? obj)
+	       (lookup system-environment (sub-extract (data.cell-name obj) a)))
+	      ((data.closure? obj)
+	       (make-closure (sub-extract (data.closure-template obj) a)
+			     (sub-extract (data.closure-env obj) a)))
+	      ((data.string? obj)
+	       (data.extract-string obj))
+	      ((data.code-vector? obj)
+	       (let ((z (data.code-vector-length obj)))
+		 (let ((v (make-code-vector z)))
+		   (do ((i 0 (+ i 1)))
+		       ((>= i z) v)
+		     (code-vector-set! v i (data.code-vector-ref obj i))))))
+	      (else `(<random> ,obj))))))
+
+(define data.set-contents! (structure-ref data set-contents!))
+(define data.lookup (structure-ref data lookup))
+(define data.enter-fixnum (structure-ref data enter-fixnum))
+(define data.enter-char (structure-ref data enter-char))
+(define data.null (structure-ref data null))
+(define data.false (structure-ref data false))
+(define data.true (structure-ref data true))
+(define data.eof-object (structure-ref data eof-object))
+(define data.cons (structure-ref data cons))
+(define data.intern (structure-ref data intern))
+(define data.make-code-vector (structure-ref data make-code-vector))
+(define data.code-vector-set! (structure-ref data code-vector-set!))
+(define data.make-string (structure-ref data make-string))
+(define data.string-set! (structure-ref data string-set!))
+(define data.lookup (structure-ref data lookup))
+(define data.make-vector (structure-ref data make-vector))
+(define data.vector-set! (structure-ref data vector-set!))
+(define data.fixnum? (structure-ref data fixnum?))
+(define data.extract-fixnum (structure-ref data extract-fixnum))
+(define data.char? (structure-ref data char?))
+(define data.extract-char (structure-ref data extract-char))
+(define data.eq? (structure-ref data eq?))
+(define data.null (structure-ref data null))
+(define data.unspecified (structure-ref data unspecified))
+(define data.pair? (structure-ref data pair?))
+(define data.car (structure-ref data car))
+(define data.cdr (structure-ref data cdr))
+(define data.vector? (structure-ref data vector?))
+(define data.vector-length (structure-ref data vector-length))
+(define data.vector-ref (structure-ref data vector-ref))
+(define data.symbol? (structure-ref data symbol?))
+(define data.extract-string (structure-ref data extract-string))
+(define data.symbol->string (structure-ref data symbol->string))
+(define data.cell? (structure-ref data cell?))
+(define data.cell-name (structure-ref data cell-name))
+(define data.closure? (structure-ref data closure?))
+(define data.closure-template (structure-ref data closure-template))
+(define data.closure-env (structure-ref data closure-env))
+(define data.string? (structure-ref data string?))
+(define data.code-vector? (structure-ref data code-vector?))
+(define data.code-vector-length (structure-ref data code-vector-length))
+(define data.code-vector-ref (structure-ref data code-vector-ref))

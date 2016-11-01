@@ -1,0 +1,31 @@
+; -*- Mode: Scheme; Syntax: Scheme; Package: bare-machine  -*-
+
+; This is file enum.scm.
+
+;;;; Enumerated types
+
+; The expression
+;   (define-enumeration <e-type> (<tag>*))
+; will (a) define the variable <e-type> to name an enumerated type,
+; and (b) define <e-type>/<tag1> ... <e-type>/<tagn> to be small
+; integers.
+
+(define-macro (define-enumeration name cases)
+  `(begin (define ,name ',(list->vector cases))
+	  ,@(do ((c cases (cdr c))
+		 (i 0 (+ i 1))
+		 (d '() (cons `(define ,(concatenate-symbol name '/ (car c))
+				 ,i)
+			      d)))
+		((null? c) (reverse d)))))
+
+; Break the enumerated types abstraction.
+;   (enumerand->name <integer> <e-type>) => a symbol
+;   (name->enumerand <symbol>  <e-type>) => an integer
+
+(define (enumerand->name e e-type)
+  (vector-ref e-type e))
+
+(define (name->enumerand e e-type)
+  (or (vector-posq e e-type)
+      (error "unknown enumerand name" e)))

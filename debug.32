@@ -1,0 +1,205 @@
+; -*- Mode: Scheme; Syntax: Scheme; -*-
+
+; This is file debug.scm.
+
+;;;; Debugging utilities
+
+(define (display-interpreter-state)
+  (write-instruction *template* *pc* 0)
+  (newline)
+  (write-string "  *val* = ")
+  (write (extract *val*))
+  t)
+
+(define (gc-init)   ;for testing GC in absence of interpreter
+  (if (< (- *memory-end* *memory-end*) (cells->a-units 2000))
+      (create-memory (cells->a-units 2000) quiescent))
+  (initialize-heap)         ;set up GC registers
+  (initialize-i/o-system)
+  )
+
+(define (gc)
+  (set! *finished* (label halt-machine))
+  (run-machine collect)
+  'done)
+
+(define (interesting-tag? tag)
+  (or (eq? tag collect)
+      (and (eq? tag *finished*)
+	   (not (eq? tag halt-machine)))
+      (eq? tag handle-exception)
+      (eq? tag handle-interrupt)
+      ))
+
+; Debugging stuff for storage manager
+
+(define (subgc)  ;Dangerous -- doesn't save or restore registers
+  (room)
+  (set! *finished* halt-machine)
+  (run-machine collect)
+  (newline)
+  (write-string "[gc]")
+  (room)
+  'done)
+
+(define (room)
+  (let ((w (lambda (x) (newline) (write-string "  ") (write x))))
+    (w `(used ,(- *hp* *newspace-begin*)))
+    (w `(free ,(- *limit* *hp*)))
+    (w `(*hp* = ,*hp*))
+    (w `(new = ,*newspace-begin* ,*newspace-end*))
+    (w `(old = ,*oldspace-begin* ,*oldspace-end*))
+    'room))
+
+(define (show-memory)
+  (do ((i *newspace-begin* (show-location i)))
+      ((>= i *newspace-end*)
+       'done)))
+
+(define (show-all-memory)
+  (do ((i *memory-begin* (show-location i)))
+      ((>= i *memory-end*)
+       'done)))
+
+(define (show-location index)  ;Returns index for next location
+  (let ((x (fetch index)))
+    (cond ((not (eq? x quiescent))
+           (newline)
+           (write index)
+           (ddescribe x)
+           (cond ((b-vector-header? x)
+                  (do ((z (addr+ (addr1+ index) (header-a-units x)))
+                       (index (addr1+ index)
+                              (addr1+ index)))
+                      ((>= index z) index)
+                    (newline)
+                    (write-string "    ")
+                    (write (fetch index))))
+                 (else (addr1+ index))))
+          (else (+ index 1)))))
+
+(define (ddescribe x) 
+  (let ((tag (descriptor-tag x)))
+    (cond ((= x null)
+           (write-string " ()"))
+          ((= tag tag/fixnum)
+           (write-string " fix ")
+           (write (extract-fixnum x)))
+          ((= tag tag/stob)
+           (write-string " sto ")
+           (write (address-after-header x)))
+          ((= tag tag/header)
+           (let ((type (header-type x)))
+             (write-string " hdr ")
+             (write (enumerand->name type stob))
+             (write-char #\space)
+             (write (header-length-in-bytes x))))
+          ((= tag tag/immediate)
+           (let ((type (immediate-type x)))
+             (write-string (if (< type 8) " imm " " hdr "))  ;???
+             (write (enumerand->name type imm))
+             (write-char #\space)
+             (write (immediate-info x))))
+	  (else (error "losing big" x)))))
+
+;(define *emit-trace?* nil)
+
+;(define (emit op . operands)
+;  (cond (*emit-trace?*
+;        (newline)
+;        (write-string "  ")
+;        (write *code-index*)
+;        (write-string "  ")
+;        (write (enumerand->name op opcode))
+;        (write-string " ")
+;        (if (not (null? operands)) (write operands))))
+;  (emit-byte op)
+;  (for-each emit-byte operands))
+
+;(define-primitive 'room   ;?
+;  (lambda ()
+;    (return-from-primitive
+;      (cons (enter-fixnum (a-units->cells (addr- *limit* *hp*)))
+;            (cons (enter-fixnum (a-units->cells (addr- *hp* *newspace-begin*)))
+;                   null)))))
+
+;(define-primitive 'gc
+;  (lambda ()
+;    (set! *limit* *newspace-begin*)
+;    (force-collect)
+;    (return-from-primitive unspecified)))
+
+; Metering
+
+(define *a-count* 0)
+(define *e-count* 0)
+(define *push-count* 0)
+(define *cont-count* 0)
+(define *arg-count* 0)
+(define *procedure-count* 0)
+(define *p-win* 0)  ;453   - saves 4 cells each time
+(define *p-lose* 0) ;246
+
+(define (xrun x)
+  (room)
+  (set! *a-count* 0)  ;831    *3  2493
+  (set! *e-count* 0)  ;624    *3
+  (set! *push-count* 0)  ;1790   *1
+  (set! *cont-count* 0) 
+  (set! *arg-count* 0)
+  (set! *procedure-count* 0)
+  (set! *p-win* 0)    ;453    *3
+  (set! *p-lose* 0)   ;246    *8
+  ;;                  ;
+  (run x))            ;          12370
+
+(define (summary)
+  (let ((total 12370)
+        (breakdown (list (* *e-count* 3)      ;contours
+                         (* *push-count* 3)
+                         (* *cont-count* 5)
+                         (* *arg-count* 3)
+                         (* *procedure-count* 3))))
+    (apply format t "~&Ribs            ~5d~
+                     ~%Pushes          ~5d~
+                     ~%Continuations   ~5d~
+                     ~%Arguments       ~5d~
+                     ~%Procedures      ~5d~
+                     ~%Other ??        ~5d~
+                     ~%Total           ~5d~%"
+           (append breakdown
+                   (list (- total (apply + breakdown)) total)))))
+
+;; Evaluating (+ 1 2):
+;;   consed 12370 cells
+;;   performed 453 primitive applications with *cont* = cont/val
+;;             246
+;;   optimization saved (* 5 453) = 2265 cells
+;;                                = 18 %
+;;
+
+;; Procedure call breakdown:
+;;    Procedures     624
+;;    Primitives   699
+
+;; Contours         1872
+;; Pushes           2427
+;; Continuations    1790
+;; Arguments        5601  of which 1872 end up in environments
+;; Procedures          558
+;; Other             122
+;; Total           12370
+
+#|
+
+  (set! *push-count* (+ *push-count* 1))
+  (set! *procedure-count* (+ *procedure-count* 1))
+  (set! *arg-count* (+ *arg-count* 1))
+	   (set! *a-count* (+ *a-count* *nargs*))
+	   (set! *e-count* (+ *e-count* 1))
+	 (set! *cont-count* (+ *cont-count* 1))
+
+	 (if (eq? *cont* cont/val)
+	     (set! *p-win* (+ *p-win* 1))
+	     (set! *p-lose* (+ *p-lose* 1)))
+|#

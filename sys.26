@@ -1,0 +1,301 @@
+; -*- Mode: Scheme; Syntax: Scheme; Package: SCHEME  -*-
+
+; This is file sys.scm.
+
+; Dynamic state
+
+(define (without-interrupts thunk)
+  (let* ((temp (set-enabled-interrupts! 0))
+	 (val (thunk)))
+    (set-enabled-interrupts! temp)
+    val))
+
+; Dynamic binding
+
+(define *fluid-env* '())
+
+(define (make-fluid top-level-value)
+  (make-cell top-level-value '<fluid>))
+
+(define (fluid cell)
+  (let ((probe (assq cell *fluid-env*)))
+    (if probe (cdr probe) (contents cell))))
+
+(define (set-fluid! cell val)
+  (let ((probe (assq cell *fluid-env*)))
+    (if probe (set-cdr! probe val) (set-contents! cell val))))
+
+(define (let-fluid cell val thunk)
+  (call-with-current-continuation
+      (lambda (cont)
+	(set! *fluid-env* (cons (cons cell val) *fluid-env*))
+	(cont (thunk)))))
+
+(define (call-with-current-continuation proc)
+  (primitive-catch
+     (lambda (cont)
+       (let ((env *fluid-env*))
+	 (proc (lambda (val)
+		 (set! *fluid-env* env)
+		 (primitive-throw cont val)))))))
+
+; Unwind protection
+;  This might be better if recast using Hanson/Lamping state spaces
+;  (i.e. dynamic-wind).
+
+(define unwind-protections (make-fluid '()))
+
+(define (unwind-protect thunk protection)
+  (let ((k (call-with-current-continuation
+	     (lambda (cont)
+	       (let-fluid unwind-protections
+			  (cons cont (fluid unwind-protections))
+			  (lambda ()
+			    (let ((val (thunk)))
+			      (lambda () val))))))))
+    (protection)
+    (k)))
+
+(define (call-with-protected-continuation proc)
+  (let ((p (fluid unwind-protections)))
+    (call-with-current-continuation
+	(lambda (cont)
+	  (proc (lambda (val)
+		  (let ((q (fluid unwind-protections)))
+		    ;; We must perform all protect actions from
+		    ;; q out to p.
+		    (if (list-tail? p q)
+			(let loop ((q q))
+			  (if (eq? q p)
+			      (cont val)
+			      ;; Not there yet; pop out another level.
+			      ((car q) (lambda ()
+					 ;; Assuming that (fluid unwind-protections)
+					 ;; and (cdr q) have the same value here...
+					 ;; probably not valid, but who knows?
+					 (loop (fluid unwind-protections))))))
+			(error "you can only throw up")))))))))
+
+(define (list-tail? l1 l2)
+  (or (eq? l1 l2)
+      (and (not (null? l2))
+	   (list-tail? l1 (cdr l2)))))
+
+;;;; LOAD, EVAL, command loop, ERROR, initialization
+
+(define (load filename . env-option)
+  (let ((env (if (null? env-option) *current-environment* (car env-option))))
+    (call-with-input-file
+      filename
+      (lambda (port)
+	(let loop ()
+	  (let ((form (read port)))
+	    (cond ((eof-object? form) 'done)
+		  (else
+		   (eval form env)
+		   (loop)))))))))
+
+(define (eval form env)
+  (letrec ((recur
+	    (lambda (form)
+	      (cond ((not (pair? form)) (eval-expression form env))
+		    ((eq? (car form) 'define)
+		     (environment-set! env
+				       (cadr form)
+				       (eval-expression (caddr form) env))
+		     `(,(cadr form) defined))
+		    ((eq? (car form) 'begin)
+		     (do ((f (cdr form) (cdr f)))
+			 ((null? (cdr f)) (recur (car f)))
+		       (recur (car f))))
+		    (else (eval-expression f env))))))
+    (recur (parse-top-level-form form
+	     (lambda (exp where) exp)))))
+
+(define (eval-expression exp env)
+  ((make-closure (compile-top exp env) nil)))
+
+; Initialization and top level
+
+(define (initialize)
+  (set-enabled-interrupts! (adjoin-bits 1 0 interrupt/keyboard)) ;!?
+  (newline)
+  (display "Welcome to Scheme-48" initial-output-port))
+
+(define (dump filename)  ;(dump "z:>jar>s48>s48.sus")
+  (newline)
+  (display "Dumping to ")
+  (write filename)
+  (newline)
+  (suspend filename)
+  (initialize)
+  (reset))
+
+(define *reset* (lambda (ignore) (top-level)))
+(define *output* (list nil))      ;kludge -- fix later
+(define (output) (car *output*))
+
+(define (top-level)
+  (call-with-protected-continuation
+      (lambda (-reset-)
+	(set! *reset* -reset-)
+	(command-loop)))
+  ;; A call to the RESET procedure transfers control here.
+  (display "Top level")
+  (top-level))
+
+(define (reset)
+  (*reset* nil))
+
+; Command loop
+
+(define *the-non-printing-object* (list '*the-non-printing-object*))
+
+(define *current-environment* system-environment)
+
+(define (command-loop)
+  (newline initial-output-port)
+  (display "==> " initial-output-port)
+  (let ((form (read-form-or-command initial-input-port)))
+    (cond ((eof-object? form)
+	   (display "Use the :EXIT command to exit." initial-output-port))
+	  (else
+	   (let ((output (eval form *current-environment*)))
+	     (cond ((not (eq? output *the-non-printing-object*))
+		    (set-car! *output* output)
+		    (newline initial-output-port)
+		    (write-result output initial-output-port)))))))
+  (command-loop))
+
+(define (write-result thing port)
+  (if (or (symbol? thing) (pair? thing))
+      (write-char #\' port))
+  (write thing port))
+
+(define (read-form-or-command port)
+  (let loop ()
+    (let ((c (peek-char port)))
+      (cond ((eof-object? c) c)
+	    ((char-whitespace? c)
+	     (read-char port)
+	     (loop))
+	    ((char=? c #\:)
+	     (read-char port)
+	     (read-command port))
+	    (else (read port))))))
+
+; Commands
+;   :reset
+;   :exit
+;   :load <filename>
+;  (unimplemented --
+;   :pp <name>
+;   :trace <name>
+;   :inspect <exp>
+;   :debug
+;   :ge      -- go to environment
+;   :help
+;   :enable  -- ???)
+; etc.
+
+(define (read-command port)
+  (let ((c-name (read port)))
+    (case c-name
+      ((exit)  `(,(make-system-ref 'exit)))
+      ((reset) `(,(make-system-ref 'reset)))
+      ((load)
+       (skip-whitespace port)
+       `(,(make-system-ref 'load) ,(read-line port)))
+      (else (error "unknown command" c-name)))))
+
+; This ought to go into the debugger.
+
+(define (error message . items)
+  (newline)
+  (display "Error: ")
+  (display message)
+  (for-each (lambda (item)
+	      (newline)
+	      (display "       ")
+	      (write item))
+	    items)
+  (break))
+
+(define (not-proceedable)
+  (error "this error is not proceedable")
+  (not-proceedable))
+
+(define (exit) (halt 0))  ;?
+
+;;;; Exception handlers
+
+; ----THIS NEEDS TO BE REWRITTEN----
+
+; Cases to handle in future:
+;   n-ary + * < = etc.
+;   generic arithmetic
+;     (a) wrong type arg to arithmetic primitives
+;     (b) fixnum arithmetic overflow
+;   make optional the init argument to make-vector
+;   allow optional init arg to make-string
+;   make optional the port argument to I/O primitives
+
+(vector-fill! exception-handlers
+	      (lambda (exc cont val nargs)
+		(error "an error occurred" (enumerand->name n exception))
+		(not-proceedable)))
+
+(vector-set! exception-handlers exception/undefined-global
+	     (lambda (exc cont val)
+	       (error "undefined variable" val)))
+
+(vector-set! exception-handlers exception/bad-procedure
+	     (lambda (exc cont val)
+	       (let ((proc (machine-state-ref m register/val))
+		     (argvals (get-argvals cont nargs)))
+		 (error "call to a non-procedure" proc argvals)
+		 (proceed-after-exception m))))
+
+(define (get-argvals m)
+  (let ((nargs (machine-state-ref m register/nargs)))
+    (do ((s (machine-state-ref m register/stack) (cdr s))
+	 (l '() (cons (car s) l))
+	 (i 0 (+ i 1)))
+	((= i nargs) l))))
+
+(vector-set! exception-handlers exception/wrong-number-of-arguments
+	     (lambda (exc cont val)
+	       (let ((proc (machine-state-ref m register/val))
+		     (argvals (get-argvals m)))
+		 ;; Eventually deal with n-ary and optional versions of these:
+		 ;;   make-vector make-string
+		 ;;   read-char peek-char write-char write-string
+		 ;;   [non-essential:  + - * < =]
+		 (error "wrong number of arguments" proc argvals)
+		 (proceed-after-exception m))))
+
+(vector-set! exception-handlers exception/wrong-type-argument
+	     (lambda (exc cont val)
+	       (let ((proc (machine-state-ref m register/val))
+		     (argvals (get-argvals m)))
+		 ;; Eventually handle generic arithmetic.
+		 ;;   + - * quotient remainder < =
+		 (error "wrong type argument" proc argvals)
+		 (proceed-after-exception m))))
+
+;     exception/undefined-lexical
+;     exception/index-out-of-range
+;     exception/arithmetic-exception   [escape to bignum]
+;     exception/losing-projection
+;     exception/port-problem
+;     exception/heap-overflow  [make-vector, make-string]
+;     exception/uuo   [intern, string=?, write-string, apply, etc.]
+
+(define machine-state-ref vector-ref)
+
+(vector-set! interrupt-handlers interrupt/keyboard
+  (lambda (machine-state enabled-interrupts interrupt)
+    (set-enabled-interrupts! enabled-interrupts)	;Re-enable
+    (display "Interrupt")
+    (command-loop)
+    (proceed-after-exception machine-state)))

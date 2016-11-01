@@ -1,0 +1,60 @@
+; -*- Mode: Scheme; Syntax: Scheme; Package: Scheme; -*-
+
+; This is file bare.scm.
+
+;;;; "Bare machine"
+
+; Random things needed to build the datatypes and GC.
+
+; error
+
+(define unassigned
+  (let ((marker (list '<unassigned>)))
+    (lambda () marker)))
+
+(define (assert test)
+  (if (not test) (error "assertion failed")))
+
+; I/O
+
+;(define peek-char --undefinable--)
+
+; Strings, vectors
+
+(define %make-string make-string)  ;Used by extract-string
+(define %string-set! string-set!)
+(define %make-vector make-vector)  ;Used by i/o system
+(define %vector-ref  vector-ref)
+(define %vector-set! vector-set!)
+(define %vector-length vector-length)
+(define %vector-posq vector-posq)
+
+; 28-bits integer operations
+
+(define +&  +)
+(define -&  -)
+(define *&  *)
+(define =&  =)
+(define <&  <)
+(define <=& <=)
+(define >&  >)
+(define >=& >=)
+(define quotient&  quotient)
+(define remainder& remainder)
+
+(define (adjoin-bits high low k)
+  (+ (* high (expt 2 k)) low))
+
+(define (low-bits n k)
+  (modulo n (expt 2 k)))
+
+(define (high-bits n k)
+  (let ((two^k (expt 2 k)))
+    (if (>= n 0)
+	(quotient n two^k)
+	(quotient (- n (- two^k 1)) two^k))))
+
+(define (logand x y)
+  ;; Assumes that y is one less than a power of two,
+  ;; since that's the only case used by S48.  Whatta kludge!
+  (modulo x (+ y 1)))

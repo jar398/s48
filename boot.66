@@ -1,0 +1,103 @@
+; -*- Mode: Scheme; Syntax: Scheme; Package: Scheme; -*-
+
+; This is file boot.scm.
+
+;;;; Bootstrapping
+
+; To start up a bare system, do (boot).
+; Then you can load the world by doing (cold-load).
+; Suspend an image by saying something like
+;  (run-form '(dump "AI: X48; S48 SUS")).
+
+(define data.create-memory  (structure-ref data create-memory))
+(define data.quiescent	    (structure-ref data quiescent))
+(define data.cells->a-units (structure-ref data cells->a-units))
+(define data.make-closure   (structure-ref data make-closure))
+
+(define (init)
+  (initialize-memory)		;create memory
+  (initialize-heap)		;set up GC registers
+  (initialize-machine		;set up exception vector, etc.
+   (lambda (exc int sym env)
+     (boot-define 'exception-handlers exc)
+     (boot-define 'interrupt-handlers int)
+     (boot-define 'symbol-table sym)
+     (boot-define 'system-environment env)))
+  (initialize-i/o-system)	;clear out port vectors
+  (create-initial-ports
+   (lambda (in out)
+     (boot-define 'initial-input-port in)
+     (boot-define 'initial-output-port out)))
+  (clear-registers)		;purge garbage from registers
+  'done)
+
+(define (cold-load)
+  (for-each (lambda (f)
+	      (let ((f (symbol->string f)))
+		(boot-load #+Symbolics
+			   (string-append "AI: X48; " f " >")
+			   #-Symbolics
+			   (string-append f ".SCM"))))
+	    '(enum
+	      arch
+	      basic
+	      istruct
+	      io
+	      sys
+	      comp
+	      cprim
+	      user))
+  'done)
+
+; Misc. bootstrap and debugging stuff
+
+(define (initialize-memory)  ;Do this before booting or resuming
+  (newline)
+  (write-string "Initializing...")
+  ;; Is 100K cells big enough to do cold load & resume?
+  (if (< (- *memory-end* *memory-begin*) (data.cells->a-units 100000))
+      (data.create-memory (cells->a-units 100000) data.quiescent)))
+
+(define (boot-load filename)
+  (call-with-input-file
+    filename
+    (lambda (port)
+      (newline)
+      (display "Loading ")
+      (write filename)
+      (let loop ()
+        (let ((form (read port)))
+	  (cond ((eof-object? form) 'done)
+		(else
+		 (run-form form)
+		 (write-char #\.)
+		 (loop))))))))
+
+(define (run exp)
+  (clear-registers)
+  (extract (run-form exp)))
+
+(define (run-form form)
+  (letrec ((recur
+	    (lambda (form)
+	      (cond ((not (pair? form)) (run-expression form #f))
+		    ((eq? (car form) 'define)
+		     (boot-define (cadr form)
+				  (run-expression (caddr form) (cadr form))))
+		    ((eq? (car form) 'begin)
+		     (do ((f (cdr form) (cdr f)))
+			 ((null? (cdr f)) (recur (car f)))
+		       (recur (car f))))
+		    (else (run-expression form #f))))))
+    (recur (parse-top-level-form form
+	     (lambda (exp where) where exp)))))
+
+(define (run-expression exp where)
+  (if (and (pair? exp) (eq? (car exp) 'lambda))
+      (data.make-closure
+       (enter (compile-top exp system-environment where)))
+      (start-vm (data.make-closure
+		 (enter (compile-top `(lambda () (halt ,exp))
+				     system-environment
+				     where))))))
+

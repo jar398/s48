@@ -1,0 +1,106 @@
+; -*- Mode: Scheme; Syntax: Scheme; Package: features; -*-
+
+; This is file features.scm.
+
+;;;; Features
+
+; Mostly things needed by the bytecode compiler.
+; Some things needed by bootstrap code, too.
+
+; Mostly things that scheme-48 has built in.
+
+; Miscellaneous
+
+;(define t (= 1 1))
+;(define nil (not t))
+
+(define (vector-posq thing v)
+  (let loop ((i 0))
+    (cond ((>= i (vector-length v)) nil)
+	  ((eq? thing (vector-ref v i)) i)
+	  (else (loop (+ i 1))))))
+
+(define (string-posq thing v)
+  (let loop ((i 0))
+    (cond ((>= i (string-length v)) nil)
+	  ((eq? thing (string-ref v i)) i)
+	  (else (loop (+ i 1))))))
+
+; Random auxiliary
+
+(define (concatenate-symbol . things)
+  (string->symbol
+    (apply string-append
+	   (map (lambda (thing)
+		  (cond ((string? thing) thing)
+			((symbol? thing) (symbol->string thing))
+			((number? thing) (number->string thing '(heur)))
+			(else (error "bogus argument to CONCATENATE-SYMBOL"
+				     thing))))
+		things))))
+
+; Fluids
+
+(define (make-fluid top-value)
+  (vector 'fluid top-value))
+
+(define (fluid cell)
+  (vector-ref cell 1))
+
+(define (set-fluid! cell value)
+  (vector-set! cell 1 value))
+
+(define (let-fluid cell value thunk)
+  (let ((previous-value (fluid cell)))
+    (set-fluid! cell value)
+    (let ((result (thunk)))
+      (set-fluid! cell previous-value)
+      result)))
+
+; Tables
+
+(define (make-table)
+  (list 'table))
+
+(define (table-ref table key)
+  (let ((probe (assv key (cdr table))))
+    (if probe (cdr probe) nil)))
+
+(define (table-set! table key val)
+  (let ((probe (assv key (cdr table))))
+    (if probe
+	(set-cdr! probe val)
+	(set-cdr! table (cons (cons key val) (cdr table))))))
+
+; Code vectors
+
+(define make-code-vector make-vector)
+(define code-vector? vector?)
+(define code-vector-ref vector-ref)
+(define code-vector-length vector-length)
+
+; Cells
+
+(define (make-cell value name) (vector 'cell value name))
+(define (cell? obj)
+  (and (vector? obj)
+       (= (vector-length obj) 3)
+       (eq? (vector-ref obj 0) 'cell)))
+(define (contents cell) (vector-ref cell 1))
+(define (set-contents! cell val) (vector-set! cell 1 val))
+(define (cell-name cell) (vector-ref cell 2))
+
+; Environments
+
+(define (make-empty-environment) (make-table))
+(define system-environment (make-empty-environment))
+
+(define (lookup env sym)
+  (or (table-ref env sym)
+      (let ((cell (make-cell (unbound) sym)))
+	(table-set! env sym cell)
+	cell)))
+
+(define unbound				;Hmm.
+  (let ((marker (list '<unbound>)))
+    (lambda () marker)))

@@ -1,0 +1,110 @@
+; -*- Mode: Scheme; Syntax: Scheme; Package: features; -*-
+
+; This is file pfeatures.scm.
+
+;;;; Features
+
+; Version of Scheme-48 FEATURES module for use with PSEUDOSCHEME.
+; Keep in sync with file FEATURES.SCM.
+
+; Miscellaneous features for Pseudoscheme
+; (intended for bootstrapping Scheme-48)
+
+(lisp:import '(pseudoscheme::define[subst]
+	       lisp:the))
+
+; posq
+
+(define[subst] (vector-posq thing v)
+  (lisp:position thing (the lisp:simple-vector v)))
+
+(define[subst] (string-posq c s)
+  (lisp:position c (the lisp:simple-string s)))
+
+; Fluids (used by block compiler)
+
+(define (make-fluid top-level-value)
+  (let ((f (lisp:gensym "FLUID")))
+    (lisp:set f top-level-value)
+    f))
+
+(define[subst] (fluid f)
+  (lisp:symbol-value f))
+
+(define[subst] (set-fluid! f val)
+  (lisp:set f val))
+
+(define (let-fluid f val thunk)
+  (lisp:progv (list f) (list val) (thunk)))
+
+; Tables
+
+(define[subst] (make-table)
+  (lisp:values (lisp:make-hash-table)))
+
+(define[subst] (table-set! table key val)
+  (lisp:setf (lisp:gethash key table) val))
+
+(define[subst] (table-ref table key)
+  (lisp:gethash key table #f))
+
+; Code vectors
+
+(lisp:deftype code-vector () `(lisp:vector (lisp:unsigned-byte 8)))
+
+(define[subst] (code-vector? obj)
+  (lisp:typep obj '(code-vector)))
+
+(define (make-code-vector len)
+  (lisp:make-array len :element-type '(lisp:unsigned-byte 8)))
+
+(define[subst] (code-vector-ref bv k)
+  (lisp:aref (the (code-vector) bv)
+	     k))
+
+(define[subst] (code-vector-set! bv k val)
+  (lisp:setf (lisp:aref (the (code-vector) bv)
+			k)
+	     val))
+
+(define[subst] (code-vector-length bv)
+  (lisp:length (the (code-vector) bv)))
+
+; Cells
+
+(lisp:defstruct (cell (:predicate cell?)
+		      (:constructor make-cell (contents cell-name))
+		      (:conc-name #f)
+		      (:copier #f))
+  contents
+  cell-name)
+
+(lisp:defparameter make-cell #'make-cell)
+(lisp:defparameter cell?     #'cell?)
+(lisp:defparameter contents  #'contents)
+(lisp:defparameter cell-name #'cell-name)
+
+(define[subst] (set-contents! cell val)
+  (lisp:setf (contents cell) val))
+
+; Closures
+
+(lisp:defstruct (closure (:predicate closure?)
+			 (:constructor make-closure (template env)))
+  template env)
+
+(lisp:defparameter make-closure	    #'make-closure)
+(lisp:defparameter closure?	    #'closure?)
+(lisp:defparameter closure-template #'closure-template)
+(lisp:defparameter closure-env	    #'closure-env)
+
+; Environments
+
+(define (make-empty-environment) (make-table))
+(define system-environment (make-empty-environment))
+
+(define (lookup env sym)
+  (or (table-ref env sym)
+      (let ((cell (make-cell '<unbound> sym)))
+	(table-set! env sym cell)
+	cell)))

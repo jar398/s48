@@ -1,0 +1,104 @@
+; -*- Mode: Scheme; Syntax: Scheme; -*-
+
+; This is file arch.scm.
+
+;;;; Architecture description
+
+; Things that the VM and the runtime system both need to know.
+
+; Bytecodes: for compiler and interpreter
+
+(define-enumeration op
+  (check-nargs=	      ;nargs   -- error if *nargs* not= operand
+   check-nargs>=      ;nargs   -- error if *nargs* < operand
+   make-env           ;nargs   -- cons an environment
+   make-rest-list     ;nargs   -- cons a rest-argument list
+   literal            ;index   -- value to *val*
+   local	      ;back over
+   set-local!	      ;back over
+   global	      ;index   -- value to *val*
+   set-global!	      ;index   -- new value in *val*
+   make-closure	      ;index   -- environment in *env*
+   push               ;        -- push *val* onto stack
+   pop		      ;	       -- pop top of stack into *val*
+   make-cont          ;delta   -- save state
+   call		      ;nargs   -- proc in *val*, state in *cont*
+   jump-if-false      ;delta   -- boolean in *val*
+   jump		      ;delta
+   return	      ;	       -- continuation in *cont*, value in *val*
+   push-cont	      ;	       -- (for catch) push *cont* onto stack
+   pop-cont	      ;	       -- (for throw) pop *cont* off stack
+   spread-args	      ;nargs   -- spread argument list, push operand+length
+   n-call	      ;	       -- call; pop nargs off stack
+   native	      ;	       -- start running native code (?)
+
+   ;; Scalar primitives
+   eq?
+   fixnum?
+   + - * = <
+   quotient remainder
+   char?
+   char=?
+   char<?
+   char->ascii
+   ascii->char
+
+   ;; Data manipulation
+   pair? cons car cdr set-car! set-cdr!
+   symbol? make-symbol symbol->string
+   cell? make-cell cell-name contents set-contents! lookup
+   closure? make-closure closure-env closure-template
+   code-vector? make-code-vector code-vector-length
+     code-vector-ref code-vector-set!
+   string? make-string string-length string-ref string-set!
+   vector? make-vector vector-length vector-ref vector-set!
+
+   ;; I/O
+   open-port
+   close-port
+   input-port?
+   output-port?
+   read-char
+   peek-char
+   write-char
+   write-string
+
+   ;; Misc
+   unassigned
+   halt 
+   set-enabled-interrupts!
+   return-from-interrupt
+   suspend
+
+   ;; Unnecessary primitives
+   string=?
+   string-hash
+   reverse-list->string
+   intern
+   lookup
+   ))
+
+; Exception types: for exception generators and handlers.
+;  - How fine should the granularity be?
+
+(define-enumeration exception
+  (unassigned-local
+   undefined-global      ;cell in *val* is unbound or unassigned
+   unbound-global        ;cell in *val* is unbound (for set!)
+   bad-procedure
+   wrong-number-of-arguments
+   wrong-type-argument
+   arithmetic-overflow
+   index-out-of-range    ;bad index to vector-ref or string-ref
+   heap-overflow	 ;(make-vector huge)
+   cannot-open
+   operation-on-closed-port
+   uuo			 ;unimplemented instruction
+   ))
+
+; Interrupts
+
+(define-enumeration interrupt
+  (none
+   keyboard  ;alarmclock, ...
+   ))

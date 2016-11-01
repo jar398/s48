@@ -1,0 +1,414 @@
+; -*- Mode: Scheme; Syntax: Scheme; Package: SCHEME  -*-
+
+; This is file io.scm.
+
+; [Still to do:  transcript-on, transcript-off]
+
+;;;; I/O system
+
+; Ports
+
+(define (call-with-input-file string proc)
+  (let ((port nil))
+    (unwind-protect (lambda ()
+		      (set! port (open-input-file string))
+		      (proc port))
+		    (lambda ()
+		      (if port (close-input-port port))))))
+
+(define (call-with-output-file string proc)
+  (let ((port nil))
+    (unwind-protect (lambda ()
+		      (set! port (open-output-file string))
+		      (proc port))
+		    (lambda ()
+		      (if port (close-output-port port))))))
+
+(define the-current-input-port  (make-fluid initial-input-port))
+(define the-current-output-port (make-fluid initial-output-port))
+
+(define (current-input-port)
+  (fluid the-current-input-port))
+
+(define (current-output-port)
+  (fluid the-current-output-port))
+
+(define (with-input-from-file string thunk)
+  (call-with-input-file string
+    (lambda (port)
+      (let-fluid the-current-input-port port thunk))))
+
+(define (with-output-to-file string thunk)
+  (call-with-output-file string
+    (lambda (port)
+      (let-fluid the-current-output-port port thunk))))
+
+;;;; WRITE
+
+(define (write obj . port-option)
+  (really-write obj (output-port-option port-option)))
+
+(define (display obj . port-option)
+  (write-string obj (output-port-option port-option))) 
+
+(define (newline . port-option)
+  (write-char #\newline (output-port-option port-option)))
+
+(define (output-port-option port-option)
+  (if (null? port-option) (current-output-port) (car port-option)))
+
+(define (really-write obj port)
+  (cond ((null? obj) (write-string "()" port))
+	((pair? obj) (write-list obj port))
+	((eq? obj t) (write-string "#T" port))
+	((eq? obj nil) (write-string "#F" port))
+	((vector? obj) (write-vector obj port))
+	((symbol? obj) (write-string (symbol->string obj) port))
+	((number? obj) (write-number obj port))
+	((string? obj)
+	 (write-char #\" port)
+	 (write-string obj port)
+	 (write-char #\" port))
+	((char? obj) (write-char-literal obj port))
+	(else
+	 (write-string "#{" port)
+	 (write-string (random-identification-string obj) port)
+	 (write-string "}" port))))
+
+(define (write-char-literal obj port)
+  (cond ((char=? obj #\space)
+	 (write-string "#\\SPACE" port))
+	((char=? obj #\newline)
+	 (write-string "#\\NEWLINE" port))
+	(else
+	 (write-string "#\\" port)
+	 (write-char obj port))))
+
+(define (write-list obj port)
+  (write-char #\( port)
+  (really-write (car obj) port)
+  (let loop ((l (cdr obj))
+	     (n 1))
+       (cond ((not (pair? l))
+	      (cond ((not (null? l))
+		     (write-string " . " port)
+		     (really-write l port))))
+	     (else
+	      (write-char #\space port)
+	      (really-write (car l) port)
+	      (loop (cdr l) (+ n 1)))))
+  (write-char #\) port))
+
+(define (write-vector obj port)
+   (write-string "#(" port)
+   (let ((z (vector-length obj)))
+     (cond ((> z 0)
+	    (really-write (vector-ref obj 0) port)
+	    (let loop ((i 1))
+	      (cond ((>= i z))
+		    (else
+		     (write-char #\space port)
+		     (really-write (vector-ref obj i) port)
+		     (loop (+ i 1))))))))
+   (write-char #\) port))
+
+(define (write-number n port)
+  (write-integer port n 10))
+
+(define (write-integer port n radix)
+  (cond ((= n 0) (write-char #\0 port))
+        ((< n 0)
+         ;; Loses on least fixnum.
+         (write-char #\- port)
+         (write-integer-1 port (- 0 n) radix))
+        (else (write-integer-1 port n radix))))
+
+(define (write-integer-1 port n radix)
+  (cond ((< n radix)
+         (write-char (digit->char n) port))
+        (else
+         (write-integer-1 port (quotient n radix) radix)
+         (write-char (digit->char (remainder n radix)) port))))
+
+(define (digit->char n)
+  (ascii->char (if (< n 10)
+                   (+ n (char->ascii #\0))
+                   (+ (- n 10) (char->ascii #\a)))))
+
+(define (random-identification-string obj)
+  (cond ((procedure? obj) "Procedure")
+	((eq? obj unspecified) "Unspecified")
+	((eq? obj initial-input-port) "Initial input port")
+	((eq? obj initial-output-port) "Initial output port")
+	((input-port? obj) "Input port")
+	((output-port? obj) "Output-port")
+	((eof-object? obj) "End of file")
+	((code-vector? obj) "Code vector")
+	(else "Random object")))
+
+;;;; READ
+
+(define (read . optionals)
+  (if (null? optionals)
+      (really-read (current-input-port) standard-readtable)
+      (if (null? (cdr optionals))
+	  (really-read (car optionals) standard-readtable)
+	  (really-read (car optionals) (cadr optionals)))))
+	  
+(define close-paren (list 'close-paren))
+(define dot         (list 'dot))
+
+(define (really-read port readtable)
+  (let ((form (sub-read port readtable)))
+    (cond ((eq? form dot)
+           (error "\" . \" in illegal context"))
+          ((eq? form close-paren)
+	   ;; Too many right parens.
+           (really-read port readtable))
+          (else form))))
+
+(define (sub-read port readtable)
+  (let ((c (read-char port)))
+    (if (eof-object? c)
+	c
+	((rt-entry-reader (get-character-syntax readtable c))
+	 c port readtable))))
+
+(define (sub-read-illegal c port readtable)
+  (error "illegal character" c))
+
+; Read table entries
+
+(define (make-rt-entry reader terminating?) (cons terminating? reader))
+(define rt-entry-reader cdr)
+(define rt-entry-terminating? car)
+
+(define (make-character-syntax type . maybe-arg)
+  (let ((arg (if (null? maybe-arg) nil (car maybe-arg))))
+    (case type
+      ((constituent)     (make-rt-entry sub-read-constituent nil))
+      ((whitespace)      (make-rt-entry sub-read-whitespace  t))
+      ((illegal)	 (make-rt-entry sub-read-illegal     t))
+      ((non-terminating-macro)   (make-rt-entry arg nil))
+      ((terminating-macro macro) (make-rt-entry arg   t))
+      ;;((single-escape)	 not yet implemented)
+      ;;((multiple-escape)	 not yet implemented)
+      (else (error "bad argument to MAKE-CHARACTER-SYNTAX" type)))))
+
+; Read tables
+
+(define (make-readtable)
+  (vector 'readtable
+	  nil           ;token parser
+	  (make-vector byte-limit (make-character-syntax 'illegal))))
+
+(define (get-token-parser readtable)
+  (vector-ref readtable 1))
+(define (set-token-parser! readtable val)
+  (vector-set! readtable 1 val))
+
+(define (get-character-syntax readtable char)
+  (vector-ref (vector-ref readtable 2) (char->ascii char)))
+(define (set-character-syntax! readtable char val)
+  (vector-set! (vector-ref readtable 2) (char->ascii char) val))
+
+; The standard read table
+
+(define standard-readtable (make-readtable))
+
+(define (sub-read-whitespace c port readtable)
+  c ;ignored
+  (sub-read port readtable))
+
+(let ((whitespace (make-character-syntax 'whitespace)))
+  (for-each (lambda (c)
+	      (set-character-syntax! standard-readtable c whitespace))
+	    '(#\space #\newline #\page #\tab)))
+
+(define (sub-read-token c port readtable)
+  (let loop ((l (list (char-upcase c))) (n 1))
+    (let ((c (peek-char port)))
+      (cond ((or (eof-object? c)
+		 (rt-entry-terminating? (get-character-syntax readtable c)))
+	     (reverse-list->string l n))
+	    (else
+	     (loop (cons (char-upcase (read-char port)) l) ;fix Will's proposal?
+		   (+ n 1)))))))
+
+(define (sub-read-constituent c port readtable)
+  (let ((s (sub-read-token c port readtable)))
+    ((get-token-parser readtable) s 0 (string-length s))))
+
+(let ((constituent (make-character-syntax 'constituent)))
+  (for-each (lambda (c)
+	      (set-character-syntax! standard-readtable c constituent))
+	    (string->list
+	      (string-append "!$%&*+-./0123456789:<=>?@^_~ABCDEFGHIJKLM"
+			     "NOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"))))
+
+(define (standard-token-parser string start end)
+  (let ((c (string-ref string start)))
+    (cond ((or (not (= start 0))
+	       (not (= end (string-length string))))
+	   (error "this isn't very general" string start end))
+	  ((char=? c #\+)
+	   (if (= end 1)
+	       '+
+	       (string->number string 'e 'd)))
+	  ((char=? c #\-)
+	   (if (= end 1)
+	       '-
+	       (string->number string 'e 'd)))
+	  ((char=? c #\.)
+	   (if (= end 1)
+	       dot
+	       (string->number string 'e 'd)))
+	  (else
+	   (let ((n (digit c 10)))
+	     (if n
+		 (string->number string 'e 'd)
+		 (string->symbol string)))))))
+
+(set-token-parser! standard-readtable standard-token-parser)
+  
+(define (sub-read-list c port readtable)
+  (let ((form (sub-read port readtable)))
+    (cond ((eof-object? form)
+	   (error "end of file inside list -- unbalanced parentheses"))
+          ((eq? form close-paren) '())
+          ((eq? form dot)
+	   (let ((last-form (sub-read port readtable)))
+	     (cond ((eof-object? last-form)
+		    (error "end of file inside list -- unbalanced parentheses"))
+		   ((eq? last-form close-paren)
+		    (error "\" . )\" encountered"))
+		   ((eq? last-form dot)
+		    (error "\" . . \" encountered"))
+		   (else
+		    (let ((another-form (sub-read port readtable)))
+		      (cond ((eq? another-form close-paren) last-form)
+			    (else
+			     (error "randomness after form after dot" another-form))))))))
+          (else (cons form (sub-read-list c port readtable))))))
+
+(define (set-standard-read-macro! c proc)
+  (set-character-syntax! standard-readtable c
+			 (make-character-syntax 'macro proc)))
+
+(set-standard-read-macro! #\( sub-read-list)
+
+(set-standard-read-macro! #\)
+  (lambda (c port readtable) close-paren))
+
+(set-standard-read-macro! #\'
+  (lambda (c port readtable)
+    (list 'quote (sub-read port readtable))))
+
+(set-standard-read-macro! #\`
+  (lambda (c port readtable)
+    (list 'quasiquote (sub-read port readtable))))
+
+(set-standard-read-macro! #\,
+  (lambda (c port readtable)
+    (list (cond ((char=? (peek-char port) #\@)
+		 (read-char port)
+		 'unquote-splicing)
+		(else 'unquote))
+	  (sub-read port readtable))))
+
+(set-standard-read-macro! #\"
+  (lambda (c port readtable)
+    (let loop ((l '()) (i 0))
+      (let ((c (read-char port)))
+	(cond ((eof-object? c)
+	       (error "end of file within a string"))
+	      ((char=? c #\\)
+	       (loop (cons (sub-read-escaped-char port) l) (+ i 1)))
+	      ((char=? c #\") (reverse-list->string l i))
+	      (else (loop (cons c l) (+ i 1))))))))
+
+(define (sub-read-escaped-char port)
+  (let ((c (read-char port)))
+    (cond ((or (char=? c #\\) (char=? c #\")) c)
+          (else
+           (error "invalid escaped character in string" c)))))
+
+(define (sub-read-comment port readtable)
+  (let ((c (read-char port)))
+    (cond ((eof-object? c) c)                     ; no test with conditions
+          ((char=? c #\newline) (sub-read port readtable))
+          (else (sub-read-comment port readtable)))))
+
+(set-standard-read-macro! #\#
+  (lambda (c port readtable)
+    c ;ignored
+    (let ((c (char-upcase (read-char port))))
+      (cond ((eof-object? c) (error "end of file after #"))
+	    ((char=? c #\F) nil)
+	    ((char=? c #\T) t)
+	    ((char=? c #\\)
+	     (let ((c (peek-char port)))
+	       (if (char-alphabetic? c)
+		   (let ((name (sub-read port readtable)))
+		     (if (= (string-length (symbol->string name)) 1)
+			 c
+			 (cadr (assq name '((space   #\space)
+					    (newline #\newline)
+					    (tab     #\tab)
+					    (page    #\page))))))
+		   (read-char port))))
+	    ((char=? c #\()
+	     (list->vector (sub-read-list c port readtable)))
+	    ;; ## should evaluate to the last REP-loop result.
+	    ((char=? c #\#)
+	     `(,(make-system-ref 'output)))
+	    ((char=? c #\B) (sub-read-number port readtable 'b))
+	    ((char=? c #\O) (sub-read-number port readtable 'o))
+	    ((char=? c #\D) (sub-read-number port readtable 'd))
+	    ((char=? c #\X) (sub-read-number port readtable 'x))
+	    (else
+	     (error "unknown # syntax" c))))))
+
+(define (sub-read-number port readtable radix)
+  (string->number (sub-read-token (read-char port) port readtable) 'e radix))
+
+; Misc. utilities
+
+; String->number
+
+(define (string->number string exactness radix)
+  exactness  ;ignored for now
+  (let ((radix (case radix ((b) 2) ((o) 8) ((d) 10) ((x) 16)
+		 (else (error "losing radix" radix)))))
+    ((lambda (foo)
+       (cond ((= (string-length string) 0)
+	      (error "null string argument to STRING->NUMBER"))
+	     ((char=? (string-ref string 0) #\+)
+	      (foo 1 1))
+	     ((char=? (string-ref string 0) #\-)
+	      (foo 1 -1))
+	     (else (foo 0 1))))
+     (lambda (start sign)
+       (if (>= start (string-length string))
+	   (error "no digits follow sign in STRING->NUMBER" string)
+	   (let loop ((n 0)
+		      (pos start))
+	     (cond ((>= pos (string-length string)) n)
+		   (else
+		    (loop (+ (* n radix)
+			     (* sign (digit (string-ref string pos) radix)))
+			  (+ pos 1))))))))))
+
+(define (read-line port)
+  (let loop ((l '()) (n 0))
+    (let ((c (read-char port)))
+      (if (char=? c #\newline)
+	  (reverse-list->string l n)
+	  (loop (cons c l) (+ n 1))))))
+
+(define (skip-whitespace port)
+  (let loop ()
+    (let ((c (peek-char port)))
+      (cond ((eof-object? c) c)
+	    ((char-whitespace? c) (read-char port) (loop))
+	    (else c)))))

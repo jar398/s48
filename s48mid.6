@@ -1,0 +1,42 @@
+; -*- Midas -*-
+
+title S48MID - MacLisp primitives to support Scheme 48
+
+.fasl
+
+if1, .insrt sys:.fasl defs
+
+; Nothing here does -any- error checking.
+
+; (BYTE-AREF array index) returns the byte as a fixnum.
+; (DECLARE (FIXNUM (BYTE-AREF NOTYPE FIXNUM)))
+.entry BYTE-AREF SUBR 3		; 2 args
+	push p,cfix1		; NCALLable
+	move tt,(b)		; TT: byte number
+	idivi tt,5		; TT: word number, D: byte offset
+	ldb tt,tab(d)
+	popj p,
+
+; (BYTE-ASET array index value) stores the value and returns the array.
+; (DECLARE (NOTYPE (BYTE-ASET NOTYPE FIXNUM FIXNUM)))
+.entry BYTE-ASET SUBR 4		; 3 args
+	move t,(c)		; T: value
+	move tt,(b)		; TT: byte number
+	idivi tt,5		; TT: word number, D: byte offset
+	dpb t,tab(d)
+	popj p,
+
+tab:	350700,,@1(a)
+	260700,,@1(a)
+	170700,,@1(a)
+	100700,,@1(a)
+	010700,,@1(a)
+
+; (BYTE-ILDB bp) increments the bp and returns the next byte.
+; (DECLARE (FIXNUM (BYTE-ILDB NOTYPE)))
+.entry BYTE-ILDB SUBR 2		; 1 arg
+	push p,cfix1		; NCALLable
+	ildb tt,(a)
+	popj p,
+
+fasend

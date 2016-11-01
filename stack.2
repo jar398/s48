@@ -1,0 +1,35 @@
+; -*- Mode: Scheme; Syntax: Scheme; Package: data; -*-
+
+; This is file stack.scm.
+
+;;;; Stack management
+
+(define *stack* (unassigned))
+
+(define (set-stack! stack)
+  (set! *stack* stack))
+
+(define (push x)
+  (set! *stack* (cons x *stack*))
+  *stack*)
+
+(define (pop)
+  (let ((arg (car *stack*)))
+    (set! *stack* (cdr *stack*))
+    arg))
+
+(define-macro (push-vector . rest)
+  `(let ((v (vector ,@rest *stack*)))
+     (set! *stack* v)
+     v))
+
+(define (pop-vector size)
+  (let ((v *stack*))
+    (assert (= size (- (vector-length v) 1)))
+    (set! *stack* (vector-ref *stack* size))
+    v))
+
+(define push-size pair-size)
+(define (stack-vector-size n) (vector-size (+ n 1)))
+
+(define available-on-stack? available?)

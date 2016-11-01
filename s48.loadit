@@ -1,0 +1,16 @@
+;;;  -*- Lisp -*-
+
+
+(defun load1 (f)
+  (format t "~&Loading ~a" (probef f))
+  (load f))
+
+(defun loadit ()
+  (let ((defaultf '((ai s48) * >)))
+    (load1 'kludge)
+    (load1 'feamac)
+    (load1 'enum)
+    (load1 'arch)
+    (load1 'stub)
+    ;; (load 'interp)
+    ))

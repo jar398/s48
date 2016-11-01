@@ -1,0 +1,264 @@
+; -*- Mode: Scheme; Syntax: Scheme; Package: comp; -*-
+
+; This is file derive.scm.
+
+;;;; Macro expanders for standard derived expression types
+
+; Some day, update this module to implement Alan Bawden's proposal.
+
+(define rewriters (make-table))
+
+(define (get-macro-expander sym)
+  (table-ref rewriters sym))
+
+; The output of PARSE-TOP-LEVEL-FORM is a <form>:
+;   <form> ::= <exp>
+;	     | (define <var> <exp>)
+;	     | (begin <form>*)
+; where ALPHA has been applied to each subexpression.
+; The second argument to ALPHA is either <var> or #f.
+
+(define (parse-top-level-form form alpha)
+  ;; To do later: make this deal with macro definitions as well
+  (cond ((definition? form)
+	 (let ((lhs (definition-lhs form)))
+	   `(define ,lhs ,(alpha (definition-rhs form) lhs))))
+	((not (pair? form)) (alpha form nil))
+	((eq? (car form) 'begin)
+	 `(begin ,@(map (lambda (form)
+			  (parse-top-level-form form alpha))
+			(cdr form))))
+	((eq? (car form) 'define-macro)
+	 (let ((pat (cadr form))
+	       (body (cddr form)))
+	   ;; Kludge!!
+	   (define-rewriter (car pat)
+	     (eval `(lambda ,(cdr pat) ,@body)
+		   user-initial-environment))
+	   `',(car pat)))
+	(else
+	 (let ((probe (get-macro-expander (car form))))
+	   (if probe
+	       (parse-top-level-form (probe form) alpha)
+	       (alpha form nil))))))
+
+(define (definition? thing)
+  (and (pair? thing)
+       (eq? (car thing) 'define)))
+
+(define (definition-lhs form)
+  (let ((pat (cadr form)))
+    (if (pair? pat) (car pat) pat)))
+
+(define (definition-rhs form)
+  (let ((pat (cadr form)))
+    (if (pair? pat)
+	`(lambda ,(cdr pat) ,@(cddr form))
+	(caddr form))))
+
+; Deal with internal defines (ugh)
+
+(define (process-body exp-list)
+  (let loop ((e exp-list)
+	     (d '()))
+    (cond ((null? e)
+	   (error "null body" exp-list))
+	  ((definition? (car e))
+	   (loop (cdr e) (cons `(,(definition-lhs (car e))
+				 ,(definition-rhs (car e)))
+			       d)))
+	  ((not (null? d))
+	   `(letrec ,d ,@e))
+	  ((null? (cdr e))
+	   (car e))
+	  (else
+	   `(begin ,@e)))))
+
+; Absolute references
+
+(define system-ref-marker (list 'system-ref-marker))  ;unique marker
+
+(define (make-system-ref x)
+  (list system-ref-marker x))
+
+(define (system-ref? x)
+  (and (pair? x) (eq? (car x) system-ref-marker)))
+
+(define system-ref-name cadr)
+
+; The expanders:
+
+(define (define-rewriter name proc)
+  (table-set! rewriters name (lambda (exp) (apply proc (cdr exp)))))
+
+(define-rewriter 'and
+  (lambda conjuncts
+    (cond ((null? conjuncts) t)			;t => #t which self-evaluates
+	  ((null? (cdr conjuncts)) (car conjuncts))
+	  (else `((lambda (p th)
+		    (if p (th) p))
+		  ,(car conjuncts)
+		  (lambda () (and ,@(cdr conjuncts))))))))
+
+(define-rewriter 'case
+  (lambda (key . clauses)
+    (let ((var '%%key%%))
+      `(let ((,var ,key))
+	 (cond ,@(map (lambda (clause)
+			(let ((cases (car clause)))
+			  `(,(cond ((eq? cases 'else) 'else)
+				   ((null? cases) nil)
+				   (else
+				    `(,(make-system-ref 'memv) ,var ',cases)))
+			    ,@(cdr clause))))
+		      clauses))))))
+
+(define-rewriter 'cond
+  (lambda clauses
+    (cond ((null? clauses) (make-system-ref 'unspecified))  ;How to do absolute references?
+	  ((null? (cdar clauses))
+	   `(or ,(caar clauses)
+		(cond ,@(cdr clauses))))
+	  ((eq? (caar clauses) 'else)
+	   `(begin ,@(cdar clauses)))
+	  ((eq? (cadr (car clauses)) '=>)
+	   `((lambda (p q th) (if p (q p) (th)))
+	     ,(car (car clauses))
+	     (lambda () ,(caddr (car clauses)))
+	     (lambda () (cond ,@(cdr clauses)))))
+	  (else `(if ,(caar clauses)
+		     (begin ,@(cdar clauses))
+		     (cond ,@(cdr clauses)))))))
+
+(define-rewriter 'delay
+  (lambda (thing)
+    `(,(make-system-ref 'make-promise) (lambda () ,thing))))
+
+(define-rewriter 'do
+  (lambda (specs end . body)
+    (let ((loop '%%do%%))
+      `(letrec ((,loop
+		  (lambda ,(map car specs)
+		    (cond ,end
+			  (else ,@body
+				(,loop
+				 ,@(map (lambda (y)
+					  (if (null? (cddr y))
+					      (car y)
+					      (caddr y)))
+					specs)))))))
+	 (,loop ,@(map cadr specs))))))
+
+(define-rewriter 'let
+  (lambda (specs . body)
+    (cond ((symbol? specs)
+	   (let ((tag specs)
+		 (specs (car body))
+		 (body (cdr body)))
+	     `(letrec ((,tag (lambda ,(map car specs) ,@body)))
+		(,tag ,@(map cadr specs)))))
+	  (else
+	   `((lambda ,(map car specs) ,@body)
+	     ,@(map cadr specs))))))
+
+(define-rewriter 'let*
+  (lambda (specs . body)
+    (if (or (null? specs)
+	    (null? (cdr specs)))
+	`(let ,specs ,@body)
+	`(let (,(car specs)) (let* ,(cdr specs) ,@body)))))
+
+(define-rewriter 'letrec
+  (lambda (specs . body)
+    `((lambda ,(map car specs)
+	,@(map (lambda (spec) `(set! ,@spec)) specs)
+	,@body)
+      ,@(map (lambda (spec)
+	       spec ;ignored
+	       `(,(make-system-ref 'unassigned)))
+	     specs))))
+
+(define-rewriter 'or
+  (lambda disjuncts
+    (cond ((null? disjuncts) nil)			;nil => #f which self-evaluates
+	  ((null? (cdr disjuncts)) (car disjuncts))
+	  (else `((lambda (p th)
+		    (if p p (th)))
+		  ,(car disjuncts)
+		  (lambda () (or ,@(cdr disjuncts))))))))
+
+(define-rewriter 'define-all-compiler-primitives
+  (lambda ()
+    `(begin ,@(definitions-for-all-compiler-primitives))))
+
+(define-rewriter 'define
+  (lambda (pat . body)
+    (error "definition occurs in illegal context"
+	   `(define ,pat ,@body))))
+
+;;;; Quasiquote
+
+(define-rewriter 'quasiquote
+  (lambda (x)
+    (expand-quasiquote x 0)))
+
+(define (expand-quasiquote x level)
+  (descend-quasiquote x level finalize-quasiquote))
+
+(define (finalize-quasiquote mode arg)
+  (cond ((eq? mode 'quote) `',arg)
+	((eq? mode 'unquote) arg)
+	((eq? mode 'unquote-splicing)
+	 (error ",@ in illegal context" arg))
+	(else `(,mode ,@arg))))
+
+(define (descend-quasiquote x level return)
+  (cond ((vector? x)
+	 (descend-quasiquote-vector x level return))
+	((not (pair? x))
+	 (return 'quote x))
+	((interesting-to-quasiquote? x 'quasiquote)
+	 (descend-quasiquote-pair x (+ level 1) return))
+	((interesting-to-quasiquote? x 'unquote)
+	 (cond ((= level 0)
+		(return 'unquote (cadr x)))
+	       (else
+		(descend-quasiquote-pair x (- level 1) return))))
+	((interesting-to-quasiquote? x 'unquote-splicing)
+	 (cond ((= level 0)
+		(return 'unquote-splicing (cadr x)))
+	       (else
+		(descend-quasiquote-pair x (- level 1) return))))
+        (else
+	 (descend-quasiquote-pair x level return))))
+
+(define (descend-quasiquote-pair x level return)
+  (descend-quasiquote (car x) level
+    (lambda (car-mode car-arg)
+      (descend-quasiquote (cdr x) level
+        (lambda (cdr-mode cdr-arg)
+	  (cond ((and (eq? car-mode 'quote) (eq? cdr-mode 'quote))
+		 (return 'quote x))
+		((eq? car-mode 'unquote-splicing)
+		 ;; (,@mumble ...)
+		 (cond ((and (eq? cdr-mode 'quote) (null? cdr-arg))
+			(return 'unquote
+				car-arg))
+		       (else
+			(return (make-system-ref 'append)
+				(list car-arg (finalize-quasiquote cdr-mode cdr-arg))))))
+		(else
+		 (return (make-system-ref 'cons)
+			 (list (finalize-quasiquote car-mode car-arg)
+			       (finalize-quasiquote cdr-mode cdr-arg))))))))))
+
+(define (descend-quasiquote-vector x level return)
+  (descend-quasiquote (vector->list x) level
+    (lambda (mode arg)
+      (case mode
+	((quote) (return 'quote x))
+	(else (return (make-system-ref 'list->vector)
+		      (list (finalize-quasiquote mode arg))))))))
+
+(define (interesting-to-quasiquote? x marker)
+  (and (pair? x) (eq? (car x) marker)))

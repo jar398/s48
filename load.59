@@ -1,0 +1,84 @@
+; -*- Mode: Scheme; Syntax: Scheme; Package: Scheme; -*-
+
+; This is file load.scm.
+
+;;;; Build a Scheme-48 system
+
+; Macro auxiliary; must be in scheme package
+
+(lisp:import 'pseudoscheme::concatenate-symbol)
+(lisp:defparameter concatenate-symbol #'concatenate-symbol)
+
+; Module system
+
+(load "module.fas")
+
+; Get signatures
+
+(load "sigs.scm")
+
+; See file boot.scm for instruction on what to do once the thing is
+; loaded.
+
+(define-structure features features-sig
+  (open-structure scheme)
+  (import '(eval user-initial-environment concatenate-symbol)) ;from pseudoscheme
+  (include pfeatures))
+
+(define-structure bare-machine bare-machine-sig
+  (open-structure scheme
+		  features)  ;ascii needs tables
+  (include pbare
+	   ascii
+	   enum
+	   run))
+
+(define-structure data data-sig
+  (open-structure bare-machine)
+  (include memory
+	   data
+	   struct
+	   vmio
+	   stack
+	   gc))
+
+(define-functor (make-vm (data data-sig)) vm-sig
+  (open-structure bare-machine
+		  data)
+  (include arch  
+	   istruct   
+	   interp
+	   prim
+	   resume))
+
+(define vm (make-vm data))
+
+;(define-structure stub-data data-sig
+;  (open-structure bare-machine
+;		  scheme)
+;  (include stub))
+;
+;(define stub-vm (make-vm stub-data))
+
+(define-structure comp comp-sig
+  (open-structure scheme
+		  features)
+  (import (lisp:intern "DEFINE-ENUMERATION" bare-machine)) ;ugh
+  (import (lisp:intern "NAME->ENUMERAND" bare-machine)) ;temp kludge!
+  (include arch
+	   istruct
+	   derive
+	   comp
+	   cprim
+	   ;; assem
+	   ))
+
+(define-structure boot boot-sig
+  (open-structure scheme
+		  features		;transporter needs
+		  vm
+		  comp)
+  (include boot
+	   transport
+	   ;; debug
+	   ))
